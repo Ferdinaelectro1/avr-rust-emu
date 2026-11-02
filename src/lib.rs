@@ -102,6 +102,15 @@ impl Cpu {
             _ => Err(String::from("Out of Adress Space"))
         }
     }
+
+    fn fetch(&mut self) -> Result<u16,String> {
+        if self.pc as usize >= self.flash.len() {
+            return Err(String::from("Invalid value of pc"));
+        }
+        let word: u16 = self.flash[self.pc as usize];
+        self.pc += 1;
+        Ok(word)
+    }
 }
 
 #[cfg(test)]

@@ -166,3 +166,31 @@ fn test_add() {
 fn test_unknown() {
     assert_eq!(decode(0xFFFF),Instruction::Unknown(0xFFFF));   
 }
+
+#[test]
+fn fetch_reads_first_word() {
+    let mut cpu = Cpu::new();
+    cpu.flash[0] = 0xE005;
+    assert_eq!(cpu.fetch(),Ok(0xE005));
+    assert_eq!(cpu.pc,1);
+}
+
+#[test]
+fn fetch_reads_at_pc() {
+    let mut cpu = Cpu::new();
+    cpu.flash[60] = 0xE005;
+    cpu.pc = 60;
+    assert_eq!(cpu.fetch(),Ok(0xE005));
+    assert_eq!(cpu.pc,61);
+}
+
+#[test]
+fn fetch_fails_past_flash_end() {
+    let mut cpu = Cpu::new();
+    cpu.flash[FLASH_SIZE-1] = 0xE005;
+    cpu.pc = (FLASH_SIZE - 1) as u16;
+    assert_eq!(cpu.fetch(),Ok(0xE005));
+    assert_eq!(cpu.pc as usize,FLASH_SIZE);
+    assert!(cpu.fetch().is_err());
+    assert_eq!(cpu.pc as usize,FLASH_SIZE);
+}
