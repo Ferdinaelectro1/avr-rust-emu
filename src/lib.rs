@@ -1,6 +1,6 @@
 //lib.rs
 pub mod constants;
-use std::{format, todo};
+use std::{format, println};
 
 use crate::constants::*;
 
@@ -160,14 +160,55 @@ impl Cpu {
         }
     }
 
-    fn step(&mut self) -> Result<(),String> {
+    pub fn step(&mut self) -> Result<(),String> {
         let instruction_word = self.fetch()?;
         let instruction = decode(instruction_word);
         self.execute(instruction)
     }
 
-    fn load_program(&mut self, words: &[u16]) {
+    pub fn load_program(&mut self, words: &[u16]) {
         self.flash[..words.len()].copy_from_slice(words);
+    }
+
+    pub fn print_cpu(&self) {
+        let width = 40;
+        // Flags in display order, from bit 7 (I) down to bit 0 (C)
+        let flags = [
+            ('I', FLAG_INTERRUPT_ENABLE),
+            ('T', FLAG_BIT_COPY),
+            ('H', FLAG_HALF_CARRY),
+            ('S', FLAG_SIGN),
+            ('V', FLAG_OVERFLOW),
+            ('N', FLAG_NEGATIVE),
+            ('Z', FLAG_ZERO),
+            ('C', FLAG_CARRY),
+        ];
+
+        println!("{:-^width$}", "CPU");
+        println!("PC  : {:#06X}        SP : {:#06X}", self.pc, self.sp);
+
+        let names: Vec<String> = flags.iter().map(|(name, _)| name.to_string()).collect();
+        let values: Vec<&str> = flags
+            .iter()
+            .map(|(_, mask)| if self.sreg & mask != 0 { "1" } else { "." })
+            .collect();
+        println!("SREG: {:#04X}        {}", self.sreg, names.join(" "));
+        println!("                  {}", values.join(" "));
+
+        println!("{:-^width$}", "REGISTERS");
+        print!("    ");
+        for col in 0..8 {
+            print!(" +{col} ");
+        }
+        println!();
+        for (row, chunk) in self.registers.chunks(8).enumerate() {
+            print!("R{:02}:", row * 8);
+            for value in chunk {
+                print!(" {value:02X} ");
+            }
+            println!();
+        }
+        println!("{:-<width$}", "");
     }
 }
 
