@@ -35,6 +35,13 @@ fn write_sram_test() {
     assert_eq!(cpu.sram[SRAM_SIZE - 1],0xFF);
 }
 
+
+#[test]
+fn write_out_of_address_space_test() {
+    let mut cpu = Cpu::new();
+    assert!(cpu.write_data(RAMEND + 1, 0xFF).is_err());
+}
+
 #[test]
 fn sreg_write_replaces_whole_value() {
     let mut cpu = Cpu::new();
