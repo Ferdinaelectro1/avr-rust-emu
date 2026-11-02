@@ -5,36 +5,35 @@ use super::*;
 #[test]
 fn write_regs_test() {
     let mut cpu = Cpu::new();
-    assert_eq!(cpu.write_data(REGISTERS_START, 0xFF),Ok(()));
-    assert_eq!(cpu.registers[0],0xFF);
-    assert_eq!(cpu.write_data(REGISTERS_START + 3, 0xFF),Ok(()));
-    assert_eq!(cpu.registers[3],0xFF);
-    assert_eq!(cpu.write_data(REGISTERS_END, 0xFF),Ok(()));
-    assert_eq!(cpu.registers[CPU_REGISTERS_SIZE - 1],0xFF);
+    assert_eq!(cpu.write_data(REGISTERS_START, 0xFF), Ok(()));
+    assert_eq!(cpu.registers[0], 0xFF);
+    assert_eq!(cpu.write_data(REGISTERS_START + 3, 0xFF), Ok(()));
+    assert_eq!(cpu.registers[3], 0xFF);
+    assert_eq!(cpu.write_data(REGISTERS_END, 0xFF), Ok(()));
+    assert_eq!(cpu.registers[CPU_REGISTERS_SIZE - 1], 0xFF);
 }
 
 #[test]
 fn write_io_test() {
     let mut cpu = Cpu::new();
-    assert_eq!(cpu.write_data(IO_START, 0xFF),Ok(()));
-    assert_eq!(cpu.io[0],0xFF);
-    assert_eq!(cpu.write_data(IO_START + 3, 0xFF),Ok(()));
-    assert_eq!(cpu.io[3],0xFF);
-    assert_eq!(cpu.write_data(IO_END, 0xFF),Ok(()));
-    assert_eq!(cpu.io[IO_SIZE - 1],0xFF);
+    assert_eq!(cpu.write_data(IO_START, 0xFF), Ok(()));
+    assert_eq!(cpu.io[0], 0xFF);
+    assert_eq!(cpu.write_data(IO_START + 3, 0xFF), Ok(()));
+    assert_eq!(cpu.io[3], 0xFF);
+    assert_eq!(cpu.write_data(IO_END, 0xFF), Ok(()));
+    assert_eq!(cpu.io[IO_SIZE - 1], 0xFF);
 }
 
 #[test]
 fn write_sram_test() {
     let mut cpu = Cpu::new();
-    assert_eq!(cpu.write_data(SRAM_START, 0xFF),Ok(()));
-    assert_eq!(cpu.sram[0],0xFF);
-    assert_eq!(cpu.write_data(SRAM_START + 3, 0xFF),Ok(()));
-    assert_eq!(cpu.sram[3],0xFF);
-    assert_eq!(cpu.write_data(RAMEND, 0xFF),Ok(()));
-    assert_eq!(cpu.sram[SRAM_SIZE - 1],0xFF);
+    assert_eq!(cpu.write_data(SRAM_START, 0xFF), Ok(()));
+    assert_eq!(cpu.sram[0], 0xFF);
+    assert_eq!(cpu.write_data(SRAM_START + 3, 0xFF), Ok(()));
+    assert_eq!(cpu.sram[3], 0xFF);
+    assert_eq!(cpu.write_data(RAMEND, 0xFF), Ok(()));
+    assert_eq!(cpu.sram[SRAM_SIZE - 1], 0xFF);
 }
-
 
 #[test]
 fn write_out_of_address_space_test() {
@@ -83,35 +82,34 @@ fn sp_and_sreg_writes_do_not_touch_io_array() {
 fn read_regs_test() {
     let mut cpu = Cpu::new();
     cpu.registers[0] = 0xFF;
-    assert_eq!(cpu.read_data(REGISTERS_START),Ok(0xFF));
+    assert_eq!(cpu.read_data(REGISTERS_START), Ok(0xFF));
     cpu.registers[3] = 0xFF;
-    assert_eq!(cpu.read_data(REGISTERS_START+3),Ok(0xFF));
-    cpu.registers[CPU_REGISTERS_SIZE-1] = 0xFF;
-    assert_eq!(cpu.read_data(REGISTERS_END),Ok(0xFF));
+    assert_eq!(cpu.read_data(REGISTERS_START + 3), Ok(0xFF));
+    cpu.registers[CPU_REGISTERS_SIZE - 1] = 0xFF;
+    assert_eq!(cpu.read_data(REGISTERS_END), Ok(0xFF));
 }
 
 #[test]
 fn read_io_test() {
     let mut cpu = Cpu::new();
     cpu.io[0] = 0xFF;
-    assert_eq!(cpu.read_data(IO_START),Ok(0xFF));
+    assert_eq!(cpu.read_data(IO_START), Ok(0xFF));
     cpu.io[3] = 0xFF;
-    assert_eq!(cpu.read_data(IO_START+3),Ok(0xFF));
-    cpu.io[IO_SIZE-1] = 0xFF;
-    assert_eq!(cpu.read_data(IO_END),Ok(0xFF));
+    assert_eq!(cpu.read_data(IO_START + 3), Ok(0xFF));
+    cpu.io[IO_SIZE - 1] = 0xFF;
+    assert_eq!(cpu.read_data(IO_END), Ok(0xFF));
 }
 
 #[test]
 fn read_sram_test() {
     let mut cpu = Cpu::new();
     cpu.sram[0] = 0xFF;
-    assert_eq!(cpu.read_data(SRAM_START),Ok(0xFF));
+    assert_eq!(cpu.read_data(SRAM_START), Ok(0xFF));
     cpu.sram[3] = 0xFF;
-    assert_eq!(cpu.read_data(SRAM_START + 3),Ok(0xFF));
-    cpu.sram[SRAM_SIZE-1] = 0xFF;
-    assert_eq!(cpu.read_data(RAMEND),Ok(0xFF));
+    assert_eq!(cpu.read_data(SRAM_START + 3), Ok(0xFF));
+    cpu.sram[SRAM_SIZE - 1] = 0xFF;
+    assert_eq!(cpu.read_data(RAMEND), Ok(0xFF));
 }
-
 
 #[test]
 fn read_out_of_address_space_test() {
@@ -123,56 +121,56 @@ fn read_out_of_address_space_test() {
 fn sreg_read_replaces_whole_value() {
     let mut cpu = Cpu::new();
     cpu.sreg = 0xF2;
-    assert_eq!(cpu.read_data(SREG_ADDR),Ok(0xF2));
+    assert_eq!(cpu.read_data(SREG_ADDR), Ok(0xF2));
 }
 
 #[test]
 fn spl_read_returns_low_byte() {
     let mut cpu = Cpu::new();
     cpu.sp = 0x1234;
-    assert_eq!(cpu.read_data(SPL_ADDR),Ok(0x34));
+    assert_eq!(cpu.read_data(SPL_ADDR), Ok(0x34));
 }
 
 #[test]
 fn sph_read_keeps_high_byte() {
     let mut cpu = Cpu::new();
     cpu.sp = 0x1234;
-    assert_eq!(cpu.read_data(SPH_ADDR),Ok(0x12));
+    assert_eq!(cpu.read_data(SPH_ADDR), Ok(0x12));
 }
 
 //NOP
 #[test]
 fn test_decode_nop() {
-    assert_eq!(decode(0x0000),Instruction::Nop); 
+    assert_eq!(decode(0x0000), Instruction::Nop);
 }
 
 //LDI dest,k
 #[test]
 fn test_decode_ldi() {
-    assert_eq!(decode(0xE005),Instruction::Ldi { dest: 16, k: 5 });
-    assert_eq!(decode(0xEFFF),Instruction::Ldi { dest: 31, k: 255 });
+    assert_eq!(decode(0xE005), Instruction::Ldi { dest: 16, k: 5 });
+    assert_eq!(decode(0xEFFF), Instruction::Ldi { dest: 31, k: 255 });
 }
 
 //ADD dest,src
 #[test]
 fn test_decode_add() {
-    assert_eq!(decode(0x0F01),Instruction::Add { dest: 16, src: 17 });
-    assert_eq!(decode(0x0C00),Instruction::Add { dest: 0,  src: 0 });
-    assert_eq!(decode(0x0FFF),Instruction::Add { dest: 31,  src: 31 });
+    assert_eq!(decode(0x0F01), Instruction::Add { dest: 16, src: 17 });
+    assert_eq!(decode(0x0C00), Instruction::Add { dest: 0, src: 0 });
+    assert_eq!(decode(0x0FFF), Instruction::Add { dest: 31, src: 31 });
 }
 
 //Unknown
 #[test]
 fn test_decode_unknown() {
-    assert_eq!(decode(0xFFFF),Instruction::Unknown(0xFFFF));   
+    assert_eq!(decode(0xFFFF), Instruction::Unknown(0xFFFF));
 }
 
 #[test]
 fn fetch_reads_first_word() {
     let mut cpu = Cpu::new();
     cpu.flash[0] = 0xE005;
-    assert_eq!(cpu.fetch(),Ok(0xE005));
-    assert_eq!(cpu.pc,1);
+    assert_eq!(cpu.fetch(), Ok(0xE005));
+    assert_eq!(cpu.pc, 1);
 }
 
 #[test]
@@ -180,28 +178,28 @@ fn fetch_reads_at_pc() {
     let mut cpu = Cpu::new();
     cpu.flash[60] = 0xE005;
     cpu.pc = 60;
-    assert_eq!(cpu.fetch(),Ok(0xE005));
-    assert_eq!(cpu.pc,61);
+    assert_eq!(cpu.fetch(), Ok(0xE005));
+    assert_eq!(cpu.pc, 61);
 }
 
 #[test]
 fn fetch_fails_past_flash_end() {
     let mut cpu = Cpu::new();
-    cpu.flash[FLASH_SIZE-1] = 0xE005;
+    cpu.flash[FLASH_SIZE - 1] = 0xE005;
     cpu.pc = (FLASH_SIZE - 1) as u16;
-    assert_eq!(cpu.fetch(),Ok(0xE005));
-    assert_eq!(cpu.pc as usize,FLASH_SIZE);
+    assert_eq!(cpu.fetch(), Ok(0xE005));
+    assert_eq!(cpu.pc as usize, FLASH_SIZE);
     assert!(cpu.fetch().is_err());
-    assert_eq!(cpu.pc as usize,FLASH_SIZE);
+    assert_eq!(cpu.pc as usize, FLASH_SIZE);
 }
 
 #[test]
 fn test_execute_nop() {
     let mut cpu = Cpu::new();
-    let program : [u16;1] = [0x0000];
+    let program: [u16; 1] = [0x0000];
     cpu.load_program(&program);
-    assert_eq!(cpu.step(),Ok(()));
-    assert_eq!(cpu.pc,1);
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.pc, 1);
     // NOP must not touch any register
     assert_eq!(cpu.registers, [0; CPU_REGISTERS_SIZE]);
 }
@@ -210,20 +208,20 @@ fn test_execute_nop() {
 fn test_execute_ldi() {
     let mut cpu = Cpu::new();
     //LDI R16, 5
-    let program : [u16;1] = [0xE005];
+    let program: [u16; 1] = [0xE005];
     cpu.load_program(&program);
-    assert_eq!(cpu.step(),Ok(()));
-    assert_eq!(cpu.registers[16],5);
-    assert_eq!(cpu.pc,1);
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.registers[16], 5);
+    assert_eq!(cpu.pc, 1);
 }
 
 #[test]
 fn test_execute_unknown() {
     let mut cpu = Cpu::new();
-    let program : [u16;1] = [0xFFFF];
+    let program: [u16; 1] = [0xFFFF];
     cpu.load_program(&program);
     assert!(cpu.step().is_err());
-    assert_eq!(cpu.pc,1);
+    assert_eq!(cpu.pc, 1);
 }
 
 #[test]
@@ -257,7 +255,7 @@ fn test_step_past_flash_end() {
     assert_eq!(cpu.pc as usize, FLASH_SIZE);
 }
 
-fn run_program(cpu: &mut Cpu,programm : &[u16]) {
+fn run_program(cpu: &mut Cpu, programm: &[u16]) {
     cpu.load_program(programm);
     for _ in 0..programm.len() {
         assert_eq!(cpu.step(), Ok(()));
@@ -271,10 +269,10 @@ fn test_execute_add_no_on_flags() {
     // LDI R17, 7
     // ADD R16, R17
     cpu.sreg = 0xFF;
-    run_program(&mut cpu,&[0xE005, 0xE017, 0x0F01]);
-    assert_eq!(cpu.registers[16],12);
-    assert_eq!(cpu.registers[17],7);
-    assert_eq!(cpu.sreg,0x00 | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+    run_program(&mut cpu, &[0xE005, 0xE017, 0x0F01]);
+    assert_eq!(cpu.registers[16], 12);
+    assert_eq!(cpu.registers[17], 7);
+    assert_eq!(cpu.sreg, 0x00 | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
 }
 
 #[test]
@@ -284,10 +282,10 @@ fn test_execute_add_carry_flag_on() {
     // LDI R17, 100
     // ADD R16, R17
     cpu.sreg = 0xFF;
-    run_program(&mut cpu,&[0xEC08, 0xE614, 0x0F01]);
-    assert_eq!(cpu.registers[16],44);
-    assert_eq!(cpu.registers[17],100);
-    assert_eq!(cpu.sreg,FLAG_CARRY |FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+    run_program(&mut cpu, &[0xEC08, 0xE614, 0x0F01]);
+    assert_eq!(cpu.registers[16], 44);
+    assert_eq!(cpu.registers[17], 100);
+    assert_eq!(cpu.sreg, FLAG_CARRY | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
 }
 
 #[test]
@@ -297,10 +295,13 @@ fn test_execute_add_carry_and_zero_and_half_flags_on() {
     // LDI R17, 1
     // ADD R16, R17
     cpu.sreg = 0xFF;
-    run_program(&mut cpu,&[0xEF0F, 0xE011, 0x0F01]);
-    assert_eq!(cpu.registers[16],0);
-    assert_eq!(cpu.registers[17],1);
-    assert_eq!(cpu.sreg,FLAG_CARRY|FLAG_ZERO|FLAG_HALF_CARRY| FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+    run_program(&mut cpu, &[0xEF0F, 0xE011, 0x0F01]);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.registers[17], 1);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_CARRY | FLAG_ZERO | FLAG_HALF_CARRY | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY
+    );
 }
 
 #[test]
@@ -310,10 +311,13 @@ fn test_execute_add_negative_and_overflow_flags_on() {
     // LDI R17, 50
     // ADD R16, R17
     cpu.sreg = 0xFF;
-    run_program(&mut cpu,&[0xE604, 0xE312, 0x0F01]);
-    assert_eq!(cpu.registers[16],150);
-    assert_eq!(cpu.registers[17],50);
-    assert_eq!(cpu.sreg,FLAG_NEGATIVE|FLAG_OVERFLOW | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+    run_program(&mut cpu, &[0xE604, 0xE312, 0x0F01]);
+    assert_eq!(cpu.registers[16], 150);
+    assert_eq!(cpu.registers[17], 50);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_NEGATIVE | FLAG_OVERFLOW | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY
+    );
 }
 
 #[test]
@@ -322,9 +326,9 @@ fn test_execute_add_same_register() {
     // LDI R16, 5
     // ADD R16, R16
     cpu.sreg = 0xFF;
-    run_program(&mut cpu,&[0xE005, 0x0F00]);
-    assert_eq!(cpu.registers[16],10);
-    assert_eq!(cpu.sreg,0x00 | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+    run_program(&mut cpu, &[0xE005, 0x0F00]);
+    assert_eq!(cpu.registers[16], 10);
+    assert_eq!(cpu.sreg, 0x00 | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
 }
 
 #[test]
@@ -334,10 +338,13 @@ fn test_execute_add_negative_overflow_half_carry_flags_on() {
     // LDI R17, 1
     // ADD R16, R17
     cpu.sreg = 0xFF;
-    run_program(&mut cpu,&[0xE70F, 0xE011, 0x0F01]);
+    run_program(&mut cpu, &[0xE70F, 0xE011, 0x0F01]);
     assert_eq!(cpu.registers[16], 128);
     assert_eq!(cpu.registers[17], 1);
-    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_OVERFLOW | FLAG_HALF_CARRY | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_NEGATIVE | FLAG_OVERFLOW | FLAG_HALF_CARRY | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY
+    );
 }
 
 #[test]
@@ -347,10 +354,13 @@ fn test_execute_add_carry_zero_overflow_sign_flags_on() {
     // LDI R17, 128
     // ADD R16, R17
     cpu.sreg = 0xFF;
-    run_program(&mut cpu,&[0xE800, 0xE810, 0x0F01]);
+    run_program(&mut cpu, &[0xE800, 0xE810, 0x0F01]);
     assert_eq!(cpu.registers[16], 0);
     assert_eq!(cpu.registers[17], 128);
-    assert_eq!(cpu.sreg, FLAG_CARRY | FLAG_ZERO | FLAG_OVERFLOW | FLAG_SIGN | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_CARRY | FLAG_ZERO | FLAG_OVERFLOW | FLAG_SIGN | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY
+    );
 }
 
 #[test]
@@ -360,8 +370,11 @@ fn test_execute_add_half_carry_flag_on() {
     // LDI R17, 8
     // ADD R16, R17
     cpu.sreg = 0xFF;
-    run_program(&mut cpu,&[0xE008, 0xE018, 0x0F01]);
+    run_program(&mut cpu, &[0xE008, 0xE018, 0x0F01]);
     assert_eq!(cpu.registers[16], 16);
     assert_eq!(cpu.registers[17], 8);
-    assert_eq!(cpu.sreg, FLAG_HALF_CARRY | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_HALF_CARRY | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY
+    );
 }
