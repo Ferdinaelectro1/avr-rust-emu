@@ -256,3 +256,112 @@ fn test_step_past_flash_end() {
     // A failed fetch must not move pc
     assert_eq!(cpu.pc as usize, FLASH_SIZE);
 }
+
+fn run_programm(cpu: &mut Cpu,programm : &[u16]) {
+    cpu.load_program(programm);
+    for _ in 0..programm.len() {
+        assert_eq!(cpu.step(), Ok(()));
+    }
+}
+
+#[test]
+fn test_execute_add_no_on_flags() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5
+    // LDI R17, 7
+    // ADD R16, R17
+    cpu.sreg = 0xFF;
+    run_programm(&mut cpu,&[0xE005, 0xE017, 0x0F01]);
+    assert_eq!(cpu.registers[16],12);
+    assert_eq!(cpu.registers[17],7);
+    assert_eq!(cpu.sreg,0x00 | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+}
+
+#[test]
+fn test_execute_add_carry_flag_on() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 200
+    // LDI R17, 100
+    // ADD R16, R17
+    cpu.sreg = 0xFF;
+    run_programm(&mut cpu,&[0xEC08, 0xE614, 0x0F01]);
+    assert_eq!(cpu.registers[16],44);
+    assert_eq!(cpu.registers[17],100);
+    assert_eq!(cpu.sreg,FLAG_CARRY |FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+}
+
+#[test]
+fn test_execute_add_carry_and_zero_and_half_flags_on() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 255
+    // LDI R17, 1
+    // ADD R16, R17
+    cpu.sreg = 0xFF;
+    run_programm(&mut cpu,&[0xEF0F, 0xE011, 0x0F01]);
+    assert_eq!(cpu.registers[16],0);
+    assert_eq!(cpu.registers[17],1);
+    assert_eq!(cpu.sreg,FLAG_CARRY|FLAG_ZERO|FLAG_HALF_CARRY| FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+}
+
+#[test]
+fn test_execute_add_negative_and_overflow_flags_on() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 100
+    // LDI R17, 50
+    // ADD R16, R17
+    cpu.sreg = 0xFF;
+    run_programm(&mut cpu,&[0xE604, 0xE312, 0x0F01]);
+    assert_eq!(cpu.registers[16],150);
+    assert_eq!(cpu.registers[17],50);
+    assert_eq!(cpu.sreg,FLAG_NEGATIVE|FLAG_OVERFLOW | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+}
+
+#[test]
+fn test_execute_add_same_register() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5
+    // ADD R16, R16
+    cpu.sreg = 0xFF;
+    run_programm(&mut cpu,&[0xE005, 0x0F00]);
+    assert_eq!(cpu.registers[16],10);
+    assert_eq!(cpu.sreg,0x00 | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+}
+
+#[test]
+fn test_execute_add_negative_overflow_half_carry_flags_on() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 127
+    // LDI R17, 1
+    // ADD R16, R17
+    cpu.sreg = 0xFF;
+    run_programm(&mut cpu,&[0xE70F, 0xE011, 0x0F01]);
+    assert_eq!(cpu.registers[16], 128);
+    assert_eq!(cpu.registers[17], 1);
+    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_OVERFLOW | FLAG_HALF_CARRY | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+}
+
+#[test]
+fn test_execute_add_carry_zero_overflow_sign_flags_on() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 128
+    // LDI R17, 128
+    // ADD R16, R17
+    cpu.sreg = 0xFF;
+    run_programm(&mut cpu,&[0xE800, 0xE810, 0x0F01]);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.registers[17], 128);
+    assert_eq!(cpu.sreg, FLAG_CARRY | FLAG_ZERO | FLAG_OVERFLOW | FLAG_SIGN | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+}
+
+#[test]
+fn test_execute_add_half_carry_flag_on() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 8
+    // LDI R17, 8
+    // ADD R16, R17
+    cpu.sreg = 0xFF;
+    run_programm(&mut cpu,&[0xE008, 0xE018, 0x0F01]);
+    assert_eq!(cpu.registers[16], 16);
+    assert_eq!(cpu.registers[17], 8);
+    assert_eq!(cpu.sreg, FLAG_HALF_CARRY | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+}

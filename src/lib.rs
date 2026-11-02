@@ -31,6 +31,11 @@ fn decode(word: u16) -> Instruction {
     }
 }
 
+fn overflowing_add(a: u8, b: u8) -> (u8, bool) {
+    let res = a as u16 + b as u16;
+    (res as u8, res > u8::MAX as u16)
+}
+
 pub struct Cpu {
     flash : [u16;FLASH_SIZE],
     sram  : [u8;SRAM_SIZE],
@@ -119,7 +124,34 @@ impl Cpu {
             Instruction::Nop => Ok(()),
             Instruction::Unknown(inst) => Err(format!("Error Invalid Instruction [{:#X}]",inst)),
             Instruction::Add { dest, src } => {
-                todo!()
+                let op_a = self.registers[dest as usize];
+                let op_b = self.registers[src as usize];
+                let (res, carry) = overflowing_add(op_a, op_b);
+                self.registers[dest as usize] = res;
+                self.sreg &= FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE; //We clear all flags without T and I flags
+                if carry {
+                    self.sreg |= FLAG_CARRY;
+                }
+                if res & 0x80 != 0 {
+                    self.sreg |= FLAG_NEGATIVE;
+                }
+                if (((op_a & 0x0F) + (op_b & 0x0F)) & 0x10) != 0 {
+                    self.sreg |=  FLAG_HALF_CARRY;
+                }
+                if ((res & 0x80 != 0) && (op_a & 0x80 == 0) && (op_b & 0x80 == 0))  ||
+                   ((res & 0x80 == 0) && (op_a & 0x80 != 0) && (op_b & 0x80 != 0))
+                {
+                    self.sreg |=  FLAG_OVERFLOW;
+                }
+                if res == 0 {
+                    self.sreg |= FLAG_ZERO;
+                }
+                let negative_on = (self.sreg & FLAG_NEGATIVE) != 0;
+                let overflow_on = (self.sreg & FLAG_OVERFLOW) != 0;
+                if negative_on != overflow_on {
+                    self.sreg |= FLAG_SIGN;
+                }
+                Ok(())
             },
             Instruction::Ldi { dest, k } => {
                 self.registers[dest as usize] = k;
