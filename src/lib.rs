@@ -47,7 +47,7 @@ impl Cpu {
             SRAM_START..=RAMEND => {
                 self.sram[(address - SRAM_START) as usize] = value;
             },
-            _ => return Err(String::from("Out of RAM Range"))
+            _ => return Err(String::from("Out of Adress Space"))
         }
         Ok(())
     }
