@@ -139,3 +139,30 @@ fn sph_read_keeps_high_byte() {
     cpu.sp = 0x1234;
     assert_eq!(cpu.read_data(SPH_ADDR),Ok(0x12));
 }
+
+//NOP
+#[test]
+fn test_nop() {
+    assert_eq!(decode(0x0000),Instruction::Nop); 
+}
+
+//LDI dest,k
+#[test]
+fn test_ldi() {
+    assert_eq!(decode(0xE005),Instruction::Ldi { dest: 16, k: 5 });
+    assert_eq!(decode(0xEFFF),Instruction::Ldi { dest: 31, k: 255 });
+}
+
+//ADD dest,src
+#[test]
+fn test_add() {
+    assert_eq!(decode(0x0F01),Instruction::Add { dest: 16, src: 17 });
+    assert_eq!(decode(0x0C00),Instruction::Add { dest: 0,  src: 0 });
+    assert_eq!(decode(0x0FFF),Instruction::Add { dest: 31,  src: 31 });
+}
+
+//Unknown
+#[test]
+fn test_unknown() {
+    assert_eq!(decode(0xFFFF),Instruction::Unknown(0xFFFF));   
+}

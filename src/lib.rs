@@ -2,6 +2,33 @@
 pub mod constants;
 use crate::constants::*;
 
+#[derive(Debug,PartialEq)]
+enum Instruction {
+    Nop,
+    Ldi {dest: u8,k: u8},
+    Add {dest: u8,src: u8},
+    Unknown(u16)
+}
+
+fn decode(word: u16) -> Instruction {
+    match word {
+        0x0000 => Instruction::Nop,
+        w if w & 0xF000 == 0xE000 => {
+            Instruction::Ldi { 
+                dest: ((w >> 4) & 0x000F) as u8 + 16, //R16 to R31
+                k: (((w >> 4) & 0x00F0) | (w & 0x000F)) as u8
+            }
+        },
+        w if w & 0xFC00 == 0x0C00 => {
+            Instruction::Add { 
+                dest: ((w >> 4) & 0x001F) as u8,
+                src:  (((w >> 5) & 0x0010) | (w & 0x000F)) as u8
+            }
+        }
+        _ => Instruction::Unknown(word)
+    }
+}
+
 pub struct Cpu {
     flash : [u16;FLASH_SIZE],
     sram  : [u8;SRAM_SIZE],
