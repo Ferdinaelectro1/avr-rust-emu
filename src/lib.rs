@@ -30,6 +30,17 @@ impl Cpu {
             REGISTERS_START..=REGISTERS_END => {
                 self.registers[address as usize] = value;
             },
+            SPL_ADDR => {
+                self.sp = self.sp & 0xFF00;
+                self.sp |= value as u16;
+            },
+            SPH_ADDR => {
+                self.sp = self.sp & 0x00FF;
+                self.sp |= (value as u16) << 8;
+            },
+            SREG_ADDR => {
+                self.sreg = value;
+            },
             IO_START..=IO_END => {
                 self.io[(address - IO_START) as usize] = value;
             },

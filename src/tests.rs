@@ -36,7 +36,38 @@ fn write_sram_test() {
 }
 
 #[test]
-fn write_out_of_address_space_test() {
+fn sreg_write_replaces_whole_value() {
     let mut cpu = Cpu::new();
-    assert!(cpu.write_data(RAMEND + 1, 0xFF).is_err());
+    assert_eq!(cpu.write_data(SREG_ADDR, 0xFF), Ok(()));
+    assert_eq!(cpu.sreg, 0xFF);
+    // Writing 0x00 must clear every flag, not just add bits
+    assert_eq!(cpu.write_data(SREG_ADDR, 0x00), Ok(()));
+    assert_eq!(cpu.sreg, 0x00);
+}
+
+#[test]
+fn spl_write_keeps_high_byte() {
+    let mut cpu = Cpu::new();
+    cpu.sp = 0x08FF;
+    assert_eq!(cpu.write_data(SPL_ADDR, 0x12), Ok(()));
+    assert_eq!(cpu.sp, 0x0812);
+}
+
+#[test]
+fn sph_write_keeps_low_byte() {
+    let mut cpu = Cpu::new();
+    cpu.sp = 0x08FF;
+    assert_eq!(cpu.write_data(SPH_ADDR, 0x01), Ok(()));
+    assert_eq!(cpu.sp, 0x01FF);
+}
+
+#[test]
+fn sp_and_sreg_writes_do_not_touch_io_array() {
+    let mut cpu = Cpu::new();
+    assert_eq!(cpu.write_data(SPL_ADDR, 0xFF), Ok(()));
+    assert_eq!(cpu.write_data(SPH_ADDR, 0xFF), Ok(()));
+    assert_eq!(cpu.write_data(SREG_ADDR, 0xFF), Ok(()));
+    assert_eq!(cpu.io[(SPL_ADDR - IO_START) as usize], 0);
+    assert_eq!(cpu.io[(SPH_ADDR - IO_START) as usize], 0);
+    assert_eq!(cpu.io[(SREG_ADDR - IO_START) as usize], 0);
 }
