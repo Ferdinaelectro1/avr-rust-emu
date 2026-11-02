@@ -78,3 +78,64 @@ fn sp_and_sreg_writes_do_not_touch_io_array() {
     assert_eq!(cpu.io[(SPH_ADDR - IO_START) as usize], 0);
     assert_eq!(cpu.io[(SREG_ADDR - IO_START) as usize], 0);
 }
+
+#[test]
+fn read_regs_test() {
+    let mut cpu = Cpu::new();
+    cpu.registers[0] = 0xFF;
+    assert_eq!(cpu.read_data(REGISTERS_START),Ok(0xFF));
+    cpu.registers[3] = 0xFF;
+    assert_eq!(cpu.read_data(REGISTERS_START+3),Ok(0xFF));
+    cpu.registers[CPU_REGISTERS_SIZE-1] = 0xFF;
+    assert_eq!(cpu.read_data(REGISTERS_END),Ok(0xFF));
+}
+
+#[test]
+fn read_io_test() {
+    let mut cpu = Cpu::new();
+    cpu.io[0] = 0xFF;
+    assert_eq!(cpu.read_data(IO_START),Ok(0xFF));
+    cpu.io[3] = 0xFF;
+    assert_eq!(cpu.read_data(IO_START+3),Ok(0xFF));
+    cpu.io[IO_SIZE-1] = 0xFF;
+    assert_eq!(cpu.read_data(IO_END),Ok(0xFF));
+}
+
+#[test]
+fn read_sram_test() {
+    let mut cpu = Cpu::new();
+    cpu.sram[0] = 0xFF;
+    assert_eq!(cpu.read_data(SRAM_START),Ok(0xFF));
+    cpu.sram[3] = 0xFF;
+    assert_eq!(cpu.read_data(SRAM_START + 3),Ok(0xFF));
+    cpu.sram[SRAM_SIZE-1] = 0xFF;
+    assert_eq!(cpu.read_data(RAMEND),Ok(0xFF));
+}
+
+
+#[test]
+fn read_out_of_address_space_test() {
+    let cpu = Cpu::new();
+    assert!(cpu.read_data(RAMEND + 1).is_err());
+}
+
+#[test]
+fn sreg_read_replaces_whole_value() {
+    let mut cpu = Cpu::new();
+    cpu.sreg = 0xF2;
+    assert_eq!(cpu.read_data(SREG_ADDR),Ok(0xF2));
+}
+
+#[test]
+fn spl_read_returns_low_byte() {
+    let mut cpu = Cpu::new();
+    cpu.sp = 0x1234;
+    assert_eq!(cpu.read_data(SPL_ADDR),Ok(0x34));
+}
+
+#[test]
+fn sph_read_keeps_high_byte() {
+    let mut cpu = Cpu::new();
+    cpu.sp = 0x1234;
+    assert_eq!(cpu.read_data(SPH_ADDR),Ok(0x12));
+}

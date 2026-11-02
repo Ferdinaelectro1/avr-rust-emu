@@ -51,6 +51,30 @@ impl Cpu {
         }
         Ok(())
     }
+
+    fn read_data(&self, address: u16) -> Result<u8, String> {
+        match address {
+            REGISTERS_START..=REGISTERS_END => {
+                Ok(self.registers[address as usize])
+            },
+            SPL_ADDR => {
+                Ok((self.sp & 0x00FF) as u8)
+            },
+            SPH_ADDR => {
+                Ok(((self.sp & 0xFF00) >> 8) as u8)
+            },
+            SREG_ADDR => {
+                Ok(self.sreg)
+            },
+            IO_START..=IO_END => {
+                Ok(self.io[(address - IO_START) as usize])
+            },
+            SRAM_START..=RAMEND => {
+                Ok(self.sram[(address - SRAM_START) as usize])
+            },
+            _ => Err(String::from("Out of Adress Space"))
+        }
+    }
 }
 
 #[cfg(test)]
