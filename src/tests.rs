@@ -142,20 +142,20 @@ fn sph_read_keeps_high_byte() {
 
 //NOP
 #[test]
-fn test_nop() {
+fn test_decode_nop() {
     assert_eq!(decode(0x0000),Instruction::Nop); 
 }
 
 //LDI dest,k
 #[test]
-fn test_ldi() {
+fn test_decode_ldi() {
     assert_eq!(decode(0xE005),Instruction::Ldi { dest: 16, k: 5 });
     assert_eq!(decode(0xEFFF),Instruction::Ldi { dest: 31, k: 255 });
 }
 
 //ADD dest,src
 #[test]
-fn test_add() {
+fn test_decode_add() {
     assert_eq!(decode(0x0F01),Instruction::Add { dest: 16, src: 17 });
     assert_eq!(decode(0x0C00),Instruction::Add { dest: 0,  src: 0 });
     assert_eq!(decode(0x0FFF),Instruction::Add { dest: 31,  src: 31 });
@@ -163,7 +163,7 @@ fn test_add() {
 
 //Unknown
 #[test]
-fn test_unknown() {
+fn test_decode_unknown() {
     assert_eq!(decode(0xFFFF),Instruction::Unknown(0xFFFF));   
 }
 
@@ -193,4 +193,66 @@ fn fetch_fails_past_flash_end() {
     assert_eq!(cpu.pc as usize,FLASH_SIZE);
     assert!(cpu.fetch().is_err());
     assert_eq!(cpu.pc as usize,FLASH_SIZE);
+}
+
+#[test]
+fn test_execute_nop() {
+    let mut cpu = Cpu::new();
+    let program : [u16;1] = [0x0000];
+    cpu.load_program(&program);
+    assert_eq!(cpu.step(),Ok(()));
+    assert_eq!(cpu.pc,1);
+    // NOP must not touch any register
+    assert_eq!(cpu.registers, [0; CPU_REGISTERS_SIZE]);
+}
+
+#[test]
+fn test_execute_ldi() {
+    let mut cpu = Cpu::new();
+    //LDI R16, 5
+    let program : [u16;1] = [0xE005];
+    cpu.load_program(&program);
+    assert_eq!(cpu.step(),Ok(()));
+    assert_eq!(cpu.registers[16],5);
+    assert_eq!(cpu.pc,1);
+}
+
+#[test]
+fn test_execute_unknown() {
+    let mut cpu = Cpu::new();
+    let program : [u16;1] = [0xFFFF];
+    cpu.load_program(&program);
+    assert!(cpu.step().is_err());
+    assert_eq!(cpu.pc,1);
+}
+
+#[test]
+fn test_execute_ldi_high_bound() {
+    let mut cpu = Cpu::new();
+    // LDI R31, 255
+    cpu.load_program(&[0xEFFF]);
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.registers[31], 255);
+    assert_eq!(cpu.pc, 1);
+}
+
+#[test]
+fn test_execute_two_ldi() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / LDI R23, 23
+    cpu.load_program(&[0xE005, 0xE177]);
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.registers[16], 5);
+    assert_eq!(cpu.registers[23], 23);
+    assert_eq!(cpu.pc, 2);
+}
+
+#[test]
+fn test_step_past_flash_end() {
+    let mut cpu = Cpu::new();
+    cpu.pc = FLASH_SIZE as u16;
+    assert!(cpu.step().is_err());
+    // A failed fetch must not move pc
+    assert_eq!(cpu.pc as usize, FLASH_SIZE);
 }

@@ -1,5 +1,7 @@
 //lib.rs
 pub mod constants;
+use std::{format, todo};
+
 use crate::constants::*;
 
 #[derive(Debug,PartialEq)]
@@ -110,6 +112,30 @@ impl Cpu {
         let word: u16 = self.flash[self.pc as usize];
         self.pc += 1;
         Ok(word)
+    }
+
+    fn execute(&mut self,instruction: Instruction) -> Result<(),String> {
+        match instruction {
+            Instruction::Nop => Ok(()),
+            Instruction::Unknown(inst) => Err(format!("Error Invalid Instruction [{:#X}]",inst)),
+            Instruction::Add { dest, src } => {
+                todo!()
+            },
+            Instruction::Ldi { dest, k } => {
+                self.registers[dest as usize] = k;
+                Ok(())
+            }
+        }
+    }
+
+    fn step(&mut self) -> Result<(),String> {
+        let instruction_word = self.fetch()?;
+        let instruction = decode(instruction_word);
+        self.execute(instruction)
+    }
+
+    fn load_program(&mut self, words: &[u16]) {
+        self.flash[..words.len()].copy_from_slice(words);
     }
 }
 
