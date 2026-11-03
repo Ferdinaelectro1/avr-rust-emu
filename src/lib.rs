@@ -10,6 +10,7 @@ enum Instruction {
     Ldi { dest: u8, k: u8 },
     Add { dest: u8, src: u8 },
     Sub { dest: u8, src: u8 },
+    Cp { dest: u8, src: u8 },
     Unknown(u16),
 }
 
@@ -32,6 +33,13 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFC00 == 0x1800 => {
             let (dest, src) = decode_dest_src(w);
             Instruction::Sub {
+                dest: dest,
+                src: src,
+            }
+        }
+        w if w & 0xFC00 == 0x1400 => {
+            let (dest, src) = decode_dest_src(w);
+            Instruction::Cp {
                 dest: dest,
                 src: src,
             }
@@ -144,6 +152,13 @@ impl Cpu {
                 let op_b = self.registers[src as usize];
                 let (res, carry) = overflowing_sub(op_a, op_b);
                 self.registers[dest as usize] = res;
+                self.update_flags_sub(op_a, op_b, res, carry);
+                Ok(())
+            }
+            Instruction::Cp { dest, src } => {
+                let op_a = self.registers[dest as usize];
+                let op_b = self.registers[src as usize];
+                let (res, carry) = overflowing_sub(op_a, op_b);
                 self.update_flags_sub(op_a, op_b, res, carry);
                 Ok(())
             }
