@@ -9,6 +9,7 @@ enum Instruction {
     Nop,
     Ldi { dest: u8, k: u8 },
     Add { dest: u8, src: u8 },
+    Sub { dest: u8, src: u8 },
     Unknown(u16),
 }
 
@@ -25,6 +26,10 @@ fn decode(word: u16) -> Instruction {
             dest: ((w >> 4) & 0x001F) as u8,
             src: (((w >> 5) & 0x0010) | (w & 0x000F)) as u8,
         },
+        w if w & 0xFC00 == 0x1800 => Instruction::Sub {
+            dest: ((w >> 4) & 0x001F) as u8,
+            src: (((w >> 5) & 0x0010) | (w & 0x000F)) as u8,
+        },
         _ => Instruction::Unknown(word),
     }
 }
@@ -32,6 +37,10 @@ fn decode(word: u16) -> Instruction {
 fn overflowing_add(a: u8, b: u8) -> (u8, bool) {
     let res = a as u16 + b as u16;
     (res as u8, res > u8::MAX as u16)
+}
+
+fn overflowing_sub(a: u8, b: u8) -> (u8, bool) {
+    ((a as u16 + 256 - b as u16) as u8, a < b)
 }
 
 pub struct Cpu {
@@ -131,6 +140,36 @@ impl Cpu {
                 }
                 if res == 0 {
                     self.sreg |= FLAG_ZERO;
+                }
+                let negative_on = (self.sreg & FLAG_NEGATIVE) != 0;
+                let overflow_on = (self.sreg & FLAG_OVERFLOW) != 0;
+                if negative_on != overflow_on {
+                    self.sreg |= FLAG_SIGN;
+                }
+                Ok(())
+            }
+            Instruction::Sub { dest, src } => {
+                let op_a = self.registers[dest as usize];
+                let op_b = self.registers[src as usize];
+                let (res, carry) = overflowing_sub(op_a, op_b);
+                self.registers[dest as usize] = res;
+                self.sreg &= FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE; //We clear all flags without T and I flags
+                if carry {
+                    self.sreg |= FLAG_CARRY;
+                }
+                if res == 0 {
+                    self.sreg |= FLAG_ZERO;
+                }
+                if res & 0x80 != 0 {
+                    self.sreg |= FLAG_NEGATIVE;
+                }
+                if (op_a & 0x0F) < (op_b & 0x0F) {
+                    self.sreg |= FLAG_HALF_CARRY;
+                }
+                if ((res & 0x80 != 0) && (op_b & 0x80 != 0) && (op_a & 0x80 == 0))
+                    || ((res & 0x80 == 0) && (op_b & 0x80 == 0) && (op_a & 0x80 != 0))
+                {
+                    self.sreg |= FLAG_OVERFLOW;
                 }
                 let negative_on = (self.sreg & FLAG_NEGATIVE) != 0;
                 let overflow_on = (self.sreg & FLAG_OVERFLOW) != 0;

@@ -159,6 +159,17 @@ fn test_decode_add() {
     assert_eq!(decode(0x0FFF), Instruction::Add { dest: 31, src: 31 });
 }
 
+// SUB dest, src
+#[test]
+fn test_decode_sub() {
+    // SUB R16, R17
+    assert_eq!(decode(0x1B01), Instruction::Sub { dest: 16, src: 17 });
+    // SUB R0, R0
+    assert_eq!(decode(0x1800), Instruction::Sub { dest: 0, src: 0 });
+    // SUB R31, R31
+    assert_eq!(decode(0x1BFF), Instruction::Sub { dest: 31, src: 31 });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -377,4 +388,117 @@ fn test_execute_add_half_carry_flag_on() {
         cpu.sreg,
         FLAG_HALF_CARRY | FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY
     );
+}
+
+#[test]
+fn test_execute_sub_half_carry_flag_on() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 20
+    // LDI R17, 5
+    // SUB R16, R17
+    cpu.sreg = 0xFF;
+    run_program(&mut cpu, &[0xE104, 0xE015, 0x1B01]);
+    assert_eq!(cpu.registers[16], 15);
+    assert_eq!(cpu.registers[17], 5);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_HALF_CARRY | FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE
+    );
+}
+
+#[test]
+fn test_execute_sub_zero_flag_on() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5
+    // LDI R17, 5
+    // SUB R16, R17
+    cpu.sreg = 0xFF;
+    run_program(&mut cpu, &[0xE005, 0xE015, 0x1B01]);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.registers[17], 5);
+    assert_eq!(cpu.sreg, FLAG_ZERO | FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE);
+}
+
+#[test]
+fn test_execute_sub_borrow_negative_half_sign_flags_on() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5
+    // LDI R17, 10
+    // SUB R16, R17
+    cpu.sreg = 0xFF;
+    run_program(&mut cpu, &[0xE005, 0xE01A, 0x1B01]);
+    assert_eq!(cpu.registers[16], 251);
+    assert_eq!(cpu.registers[17], 10);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_CARRY
+            | FLAG_NEGATIVE
+            | FLAG_HALF_CARRY
+            | FLAG_SIGN
+            | FLAG_BIT_COPY
+            | FLAG_INTERRUPT_ENABLE
+    );
+}
+
+#[test]
+fn test_execute_sub_carry_negative_overflow_flags_on() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 127
+    // LDI R17, 255
+    // SUB R16, R17
+    cpu.sreg = 0xFF;
+    run_program(&mut cpu, &[0xE70F, 0xEF1F, 0x1B01]);
+    assert_eq!(cpu.registers[16], 128);
+    assert_eq!(cpu.registers[17], 255);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_CARRY | FLAG_NEGATIVE | FLAG_OVERFLOW | FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE
+    );
+}
+
+#[test]
+fn test_execute_sub_half_overflow_sign_flags_on() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 128
+    // LDI R17, 1
+    // SUB R16, R17
+    cpu.sreg = 0xFF;
+    run_program(&mut cpu, &[0xE800, 0xE011, 0x1B01]);
+    assert_eq!(cpu.registers[16], 127);
+    assert_eq!(cpu.registers[17], 1);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_HALF_CARRY | FLAG_OVERFLOW | FLAG_SIGN | FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE
+    );
+}
+
+#[test]
+fn test_execute_sub_same_register() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5
+    // SUB R16, R16
+    cpu.sreg = 0xFF;
+    run_program(&mut cpu, &[0xE005, 0x1B00]);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.sreg, FLAG_ZERO | FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE);
+}
+
+#[test]
+fn test_execute_sub_clears_arithmetic_flags_keeps_t_and_i() {
+    let mut cpu = Cpu::new();
+    cpu.sreg = 0xFF;
+    // LDI R16, 20 / LDI R17, 17 / SUB R16, R17  -> 3, no flag
+    run_program(&mut cpu, &[0xE104, 0xE111, 0x1B01]);
+    assert_eq!(cpu.registers[16], 3);
+    assert_eq!(cpu.sreg, FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE);
+}
+
+#[test]
+fn test_execute_add_clears_arithmetic_flags_keeps_t_and_i() {
+    let mut cpu = Cpu::new();
+    cpu.sreg = 0xFF;
+    // LDI R16, 5 / LDI R17, 7 / ADD R16, R17  -> 12, no flag
+    run_program(&mut cpu, &[0xE005, 0xE017, 0x0F01]);
+    assert_eq!(cpu.registers[16], 12);
+    assert_eq!(cpu.sreg, FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE);
 }
