@@ -123,29 +123,7 @@ impl Cpu {
                 let op_b = self.registers[src as usize];
                 let (res, carry) = overflowing_add(op_a, op_b);
                 self.registers[dest as usize] = res;
-                self.sreg &= FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE; //We clear all flags without T and I flags
-                if carry {
-                    self.sreg |= FLAG_CARRY;
-                }
-                if res & 0x80 != 0 {
-                    self.sreg |= FLAG_NEGATIVE;
-                }
-                if (((op_a & 0x0F) + (op_b & 0x0F)) & 0x10) != 0 {
-                    self.sreg |= FLAG_HALF_CARRY;
-                }
-                if ((res & 0x80 != 0) && (op_a & 0x80 == 0) && (op_b & 0x80 == 0))
-                    || ((res & 0x80 == 0) && (op_a & 0x80 != 0) && (op_b & 0x80 != 0))
-                {
-                    self.sreg |= FLAG_OVERFLOW;
-                }
-                if res == 0 {
-                    self.sreg |= FLAG_ZERO;
-                }
-                let negative_on = (self.sreg & FLAG_NEGATIVE) != 0;
-                let overflow_on = (self.sreg & FLAG_OVERFLOW) != 0;
-                if negative_on != overflow_on {
-                    self.sreg |= FLAG_SIGN;
-                }
+                self.update_flags_add(op_a, op_b, res, carry);
                 Ok(())
             }
             Instruction::Sub { dest, src } => {
@@ -153,29 +131,7 @@ impl Cpu {
                 let op_b = self.registers[src as usize];
                 let (res, carry) = overflowing_sub(op_a, op_b);
                 self.registers[dest as usize] = res;
-                self.sreg &= FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE; //We clear all flags without T and I flags
-                if carry {
-                    self.sreg |= FLAG_CARRY;
-                }
-                if res == 0 {
-                    self.sreg |= FLAG_ZERO;
-                }
-                if res & 0x80 != 0 {
-                    self.sreg |= FLAG_NEGATIVE;
-                }
-                if (op_a & 0x0F) < (op_b & 0x0F) {
-                    self.sreg |= FLAG_HALF_CARRY;
-                }
-                if ((res & 0x80 != 0) && (op_b & 0x80 != 0) && (op_a & 0x80 == 0))
-                    || ((res & 0x80 == 0) && (op_b & 0x80 == 0) && (op_a & 0x80 != 0))
-                {
-                    self.sreg |= FLAG_OVERFLOW;
-                }
-                let negative_on = (self.sreg & FLAG_NEGATIVE) != 0;
-                let overflow_on = (self.sreg & FLAG_OVERFLOW) != 0;
-                if negative_on != overflow_on {
-                    self.sreg |= FLAG_SIGN;
-                }
+                self.update_flags_sub(op_a, op_b, res, carry);
                 Ok(())
             }
             Instruction::Ldi { dest, k } => {
@@ -234,6 +190,58 @@ impl Cpu {
             println!();
         }
         println!("{:-<width$}", "");
+    }
+
+    fn update_flags_add(&mut self, op_a: u8, op_b: u8, res: u8, carry: bool) {
+        self.sreg &= FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE; //We clear all flags without T and I flags
+        if carry {
+            self.sreg |= FLAG_CARRY;
+        }
+        if res & 0x80 != 0 {
+            self.sreg |= FLAG_NEGATIVE;
+        }
+        if (((op_a & 0x0F) + (op_b & 0x0F)) & 0x10) != 0 {
+            self.sreg |= FLAG_HALF_CARRY;
+        }
+        if ((res & 0x80 != 0) && (op_a & 0x80 == 0) && (op_b & 0x80 == 0))
+            || ((res & 0x80 == 0) && (op_a & 0x80 != 0) && (op_b & 0x80 != 0))
+        {
+            self.sreg |= FLAG_OVERFLOW;
+        }
+        if res == 0 {
+            self.sreg |= FLAG_ZERO;
+        }
+        let negative_on = (self.sreg & FLAG_NEGATIVE) != 0;
+        let overflow_on = (self.sreg & FLAG_OVERFLOW) != 0;
+        if negative_on != overflow_on {
+            self.sreg |= FLAG_SIGN;
+        }
+    }
+
+    fn update_flags_sub(&mut self, op_a: u8, op_b: u8, res: u8, carry: bool) {
+        self.sreg &= FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE; //We clear all flags without T and I flags
+        if carry {
+            self.sreg |= FLAG_CARRY;
+        }
+        if res == 0 {
+            self.sreg |= FLAG_ZERO;
+        }
+        if res & 0x80 != 0 {
+            self.sreg |= FLAG_NEGATIVE;
+        }
+        if (op_a & 0x0F) < (op_b & 0x0F) {
+            self.sreg |= FLAG_HALF_CARRY;
+        }
+        if ((res & 0x80 != 0) && (op_b & 0x80 != 0) && (op_a & 0x80 == 0))
+            || ((res & 0x80 == 0) && (op_b & 0x80 == 0) && (op_a & 0x80 != 0))
+        {
+            self.sreg |= FLAG_OVERFLOW;
+        }
+        let negative_on = (self.sreg & FLAG_NEGATIVE) != 0;
+        let overflow_on = (self.sreg & FLAG_OVERFLOW) != 0;
+        if negative_on != overflow_on {
+            self.sreg |= FLAG_SIGN;
+        }
     }
 }
 
