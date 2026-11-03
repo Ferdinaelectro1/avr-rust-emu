@@ -22,14 +22,20 @@ fn decode(word: u16) -> Instruction {
                 k: (((w >> 4) & 0x00F0) | (w & 0x000F)) as u8,
             }
         }
-        w if w & 0xFC00 == 0x0C00 => Instruction::Add {
-            dest: ((w >> 4) & 0x001F) as u8,
-            src: (((w >> 5) & 0x0010) | (w & 0x000F)) as u8,
-        },
-        w if w & 0xFC00 == 0x1800 => Instruction::Sub {
-            dest: ((w >> 4) & 0x001F) as u8,
-            src: (((w >> 5) & 0x0010) | (w & 0x000F)) as u8,
-        },
+        w if w & 0xFC00 == 0x0C00 => {
+            let (dest, src) = decode_dest_src(w);
+            Instruction::Add {
+                dest: dest,
+                src: src,
+            }
+        }
+        w if w & 0xFC00 == 0x1800 => {
+            let (dest, src) = decode_dest_src(w);
+            Instruction::Sub {
+                dest: dest,
+                src: src,
+            }
+        }
         _ => Instruction::Unknown(word),
     }
 }
@@ -41,6 +47,13 @@ fn overflowing_add(a: u8, b: u8) -> (u8, bool) {
 
 fn overflowing_sub(a: u8, b: u8) -> (u8, bool) {
     ((a as u16 + 256 - b as u16) as u8, a < b)
+}
+
+fn decode_dest_src(word: u16) -> (u8, u8) {
+    (
+        (((word >> 4) & 0x001F) as u8),
+        (((word >> 5) & 0x0010) | (word & 0x000F)) as u8,
+    )
 }
 
 pub struct Cpu {

@@ -502,3 +502,10 @@ fn test_execute_add_clears_arithmetic_flags_keeps_t_and_i() {
     assert_eq!(cpu.registers[16], 12);
     assert_eq!(cpu.sreg, FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE);
 }
+
+#[test]
+fn test_decode_dest_src() {
+    assert_eq!(decode_dest_src(0x0F01), (16, 17));
+    assert_eq!(decode_dest_src(0x0FFF), (31, 31));
+    assert_eq!(decode_dest_src(0x0C00), (0, 0));
+}
