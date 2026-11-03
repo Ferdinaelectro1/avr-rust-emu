@@ -181,6 +181,16 @@ fn test_decode_cp() {
     assert_eq!(decode(0x17FF), Instruction::Cp { dest: 31, src: 31 });
 }
 
+//RJMP k
+#[test]
+fn test_decode_rjmp() {
+    assert_eq!(decode(0xC000), Instruction::Rjmp { k: 0 });
+    assert_eq!(decode(0xC001), Instruction::Rjmp { k: 1 });
+    assert_eq!(decode(0xCFFF), Instruction::Rjmp { k: -1 });
+    assert_eq!(decode(0xC7FF), Instruction::Rjmp { k: 2047 });
+    assert_eq!(decode(0xC800), Instruction::Rjmp { k: -2048 });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -602,4 +612,82 @@ fn test_execute_cp_clears_arithmetic_flags_keeps_t_and_i() {
     run_program(&mut cpu, &[0xE104, 0xE111, 0x1701]);
     assert_eq!(cpu.registers[16], 20);
     assert_eq!(cpu.sreg, FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE);
+}
+
+#[test]
+fn test_decode_rjmp_neighbours_are_not_rjmp() {
+    // RCALL (1101), IN/OUT (1011) and LDI (1110) sit next to RJMP (1100)
+    assert!(!matches!(decode(0xD000), Instruction::Rjmp { .. }));
+    assert!(!matches!(decode(0xB000), Instruction::Rjmp { .. }));
+    assert!(!matches!(decode(0xE000), Instruction::Rjmp { .. }));
+}
+
+#[test]
+fn test_execute_rjmp_zero_goes_to_next_instruction() {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xC000]);
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.pc, 1);
+}
+
+#[test]
+fn test_execute_rjmp_forward_skips_instruction() {
+    let mut cpu = Cpu::new();
+    // RJMP +1 / LDI R16, 5 (skipped) / LDI R17, 7
+    cpu.load_program(&[0xC001, 0xE005, 0xE017]);
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.registers[17], 7);
+    assert_eq!(cpu.pc, 3);
+}
+
+#[test]
+fn test_execute_rjmp_loops_on_itself() {
+    let mut cpu = Cpu::new();
+    // RJMP -1
+    cpu.load_program(&[0xCFFF]);
+    for _ in 0..3 {
+        assert_eq!(cpu.step(), Ok(()));
+        assert_eq!(cpu.pc, 0);
+    }
+}
+
+#[test]
+fn test_execute_rjmp_backward() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / RJMP -2
+    cpu.load_program(&[0xE005, 0xCFFE]);
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.registers[16], 5);
+    assert_eq!(cpu.pc, 0);
+}
+
+#[test]
+fn test_execute_rjmp_wraps_below_zero() {
+    let mut cpu = Cpu::new();
+    // RJMP -2 at address 0
+    cpu.load_program(&[0xCFFE]);
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.pc as usize, FLASH_SIZE - 1);
+}
+
+#[test]
+fn test_execute_rjmp_wraps_past_flash_end() {
+    let mut cpu = Cpu::new();
+    // RJMP +1 at the last address of the flash
+    cpu.flash[FLASH_SIZE - 1] = 0xC001;
+    cpu.pc = (FLASH_SIZE - 1) as u16;
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.pc, 1);
+}
+
+#[test]
+fn test_execute_rjmp_does_not_touch_sreg() {
+    let mut cpu = Cpu::new();
+    cpu.sreg = 0xFF;
+    cpu.load_program(&[0xC001]);
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.sreg, 0xFF);
 }

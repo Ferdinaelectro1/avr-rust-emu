@@ -11,6 +11,7 @@ enum Instruction {
     Add { dest: u8, src: u8 },
     Sub { dest: u8, src: u8 },
     Cp { dest: u8, src: u8 },
+    Rjmp { k: i16 },
     Unknown(u16),
 }
 
@@ -43,6 +44,12 @@ fn decode(word: u16) -> Instruction {
                 dest: dest,
                 src: src,
             }
+        }
+        w if w & 0xF000 == 0xC000 => {
+            let raw = (w & 0x0FFF) as i16;
+            // 12-bit two's complement: bit 11 is the sign
+            let k = if raw & 0x0800 != 0 { raw - 0x1000 } else { raw };
+            Instruction::Rjmp { k: k }
         }
         _ => Instruction::Unknown(word),
     }
@@ -164,6 +171,10 @@ impl Cpu {
             }
             Instruction::Ldi { dest, k } => {
                 self.registers[dest as usize] = k;
+                Ok(())
+            }
+            Instruction::Rjmp { k } => {
+                self.pc = (self.pc as i32 + k as i32).rem_euclid(FLASH_SIZE as i32) as u16;
                 Ok(())
             }
         }
