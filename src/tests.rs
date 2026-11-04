@@ -221,6 +221,21 @@ fn test_decode_inc_dec() {
     assert_eq!(decode(0x95FA), Instruction::Dec { rd: 31 });
 }
 
+//And rd, rr
+//Eor rd, rr
+//Or  rd, rr
+#[test]
+fn test_decode_logic() {
+    // AND R16, R17 / EOR R16, R17 / OR R16, R17
+    assert_eq!(decode(0x2301), Instruction::And { rd: 16, rr: 17 });
+    assert_eq!(decode(0x2701), Instruction::Eor { rd: 16, rr: 17 });
+    assert_eq!(decode(0x2B01), Instruction::Or { rd: 16, rr: 17 });
+    // AND R0, R0 (lowest registers)
+    assert_eq!(decode(0x2000), Instruction::And { rd: 0, rr: 0 });
+    // AND R31, R31 (highest registers)
+    assert_eq!(decode(0x23FF), Instruction::And { rd: 31, rr: 31 });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -924,4 +939,143 @@ fn test_execute_dec_brne_countdown_loop() {
     assert_eq!(cpu.registers[16], 0);
     assert_eq!(cpu.sreg, FLAG_ZERO);
     assert_eq!(cpu.pc, 3);
+}
+
+#[test]
+fn test_decode_logic_neighbours_are_not_logic() {
+    // MOV, ADC and CPI sit next to the logic group
+    for word in [0x2C00, 0x1C00, 0x3000] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::And { .. } | Instruction::Or { .. } | Instruction::Eor { .. }
+            ),
+            "{word:#06X} must not decode as AND, OR or EOR"
+        );
+    }
+}
+
+#[test]
+fn test_execute_and_basic() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xFF / LDI R17, 0x0F / AND R16, R17
+    cpu.load_program(&[0xEF0F, 0xE01F, 0x2301]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0x0F);
+    assert_eq!(cpu.registers[17], 0x0F);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_and_zero() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xF0 / LDI R17, 0x0F / AND R16, R17
+    cpu.load_program(&[0xEF00, 0xE01F, 0x2301]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0x00);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_and_negative() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xFF / LDI R17, 0x80 / AND R16, R17 : N and S (V stays off)
+    cpu.load_program(&[0xEF0F, 0xE810, 0x2301]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0x80);
+    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_or_basic() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0x0A / LDI R17, 0x05 / OR R16, R17
+    cpu.load_program(&[0xE00A, 0xE015, 0x2B01]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0x0F);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_or_zero() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0 / LDI R17, 0 / OR R16, R17
+    cpu.load_program(&[0xE000, 0xE010, 0x2B01]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0x00);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_or_negative() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xF0 / LDI R17, 0x0F / OR R16, R17
+    cpu.load_program(&[0xEF00, 0xE01F, 0x2B01]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0xFF);
+    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_eor_basic() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0x55 / LDI R17, 0x0F / EOR R16, R17
+    cpu.load_program(&[0xE505, 0xE01F, 0x2701]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0x5A);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_eor_clears_register() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xAA / EOR R16, R16 (the CLR idiom)
+    cpu.load_program(&[0xEA0A, 0x2700]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0x00);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_eor_negative() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xFF / LDI R17, 0x0F / EOR R16, R17
+    cpu.load_program(&[0xEF0F, 0xE01F, 0x2701]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0xF0);
+    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_and_keeps_i_t_h_c() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xFF / LDI R17, 0x0F / AND R16, R17 with every flag on before AND
+    cpu.load_program(&[0xEF0F, 0xE01F, 0x2301]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    // I, T, H, C kept ; Z, N, V, S cleared (V is forced to 0)
+    assert_eq!(cpu.sreg, 0xE1);
+}
+
+#[test]
+fn test_execute_or_keeps_i_t_h_c() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0x0A / LDI R17, 0x05 / OR R16, R17
+    cpu.load_program(&[0xE00A, 0xE015, 0x2B01]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xE1);
+}
+
+#[test]
+fn test_execute_eor_keeps_i_t_h_c() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0x55 / LDI R17, 0x0F / EOR R16, R17
+    cpu.load_program(&[0xE505, 0xE01F, 0x2701]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xE1);
 }

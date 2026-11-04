@@ -16,6 +16,9 @@ enum Instruction {
     BRBC { s: u8, k: i8 },
     Inc { rd: u8 },
     Dec { rd: u8 },
+    And { rd: u8, rr: u8 },
+    Or { rd: u8, rr: u8 },
+    Eor { rd: u8, rr: u8 },
     Unknown(u16),
 }
 
@@ -66,6 +69,18 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFE0F == 0x940A => Instruction::Dec {
             rd: ((w >> 4) & 0x001F) as u8,
         },
+        w if w & 0xFC00 == 0x2000 => {
+            let (dest, src) = decode_dest_src(w);
+            Instruction::And { rd: dest, rr: src }
+        }
+        w if w & 0xFC00 == 0x2800 => {
+            let (dest, src) = decode_dest_src(w);
+            Instruction::Or { rd: dest, rr: src }
+        }
+        w if w & 0xFC00 == 0x2400 => {
+            let (dest, src) = decode_dest_src(w);
+            Instruction::Eor { rd: dest, rr: src }
+        }
         _ => Instruction::Unknown(word),
     }
 }
@@ -224,6 +239,21 @@ impl Cpu {
                 self.update_flags_incdec(self.registers[rd as usize], false);
                 Ok(())
             }
+            Instruction::And { rd, rr } => {
+                self.registers[rd as usize] &= self.registers[rr as usize];
+                self.update_flags_logic(self.registers[rd as usize]);
+                Ok(())
+            }
+            Instruction::Or { rd, rr } => {
+                self.registers[rd as usize] |= self.registers[rr as usize];
+                self.update_flags_logic(self.registers[rd as usize]);
+                Ok(())
+            }
+            Instruction::Eor { rd, rr } => {
+                self.registers[rd as usize] ^= self.registers[rr as usize];
+                self.update_flags_logic(self.registers[rd as usize]);
+                Ok(())
+            }
         }
     }
 
@@ -343,6 +373,17 @@ impl Cpu {
             self.sreg |= FLAG_NEGATIVE;
         }
         if ((self.sreg & FLAG_NEGATIVE) != 0) != ((self.sreg & FLAG_OVERFLOW) != 0) {
+            self.sreg |= FLAG_SIGN;
+        }
+    }
+
+    fn update_flags_logic(&mut self, res: u8) {
+        self.sreg &= FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY | FLAG_CARRY | FLAG_HALF_CARRY;
+        if res == 0 {
+            self.sreg |= FLAG_ZERO;
+        }
+        if res & 0x80 != 0 {
+            self.sreg |= FLAG_NEGATIVE;
             self.sreg |= FLAG_SIGN;
         }
     }
