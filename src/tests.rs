@@ -296,6 +296,24 @@ fn test_decode_andi_ori() {
     assert_eq!(decode(0x6A3C), Instruction::Ori { rd: 19, k: 0xAC });
 }
 
+//SBCI Rd, k
+//CPC  Rd, Rr
+#[test]
+fn test_decode_sbci_cpc() {
+    // SBCI R16, 5 / SBCI R16, 0 / SBCI R31, 0xFF
+    assert_eq!(decode(0x4005), Instruction::Sbci { rd: 16, k: 5 });
+    assert_eq!(decode(0x4000), Instruction::Sbci { rd: 16, k: 0 });
+    assert_eq!(decode(0x4FFF), Instruction::Sbci { rd: 31, k: 0xFF });
+    // a constant with different high and low nibbles : SBCI R19, 0xAC
+    assert_eq!(decode(0x4A3C), Instruction::Sbci { rd: 19, k: 0xAC });
+    // CPC R0, R0 / CPC R16, R17 / CPC R31, R31
+    assert_eq!(decode(0x0400), Instruction::Cpc { rd: 0, rr: 0 });
+    assert_eq!(decode(0x0701), Instruction::Cpc { rd: 16, rr: 17 });
+    assert_eq!(decode(0x07FF), Instruction::Cpc { rd: 31, rr: 31 });
+    // CPC R17, R19 : both register numbers have the split bit set or mixed
+    assert_eq!(decode(0x0713), Instruction::Cpc { rd: 17, rr: 19 });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -1651,4 +1669,194 @@ fn test_execute_andi_ori_keep_i_t_h_c() {
     cpu.sreg = 0xFF;
     step_n(&mut cpu, 1);
     assert_eq!(cpu.sreg, 0xE1);
+}
+
+#[test]
+fn test_decode_sbci_cpc_neighbours() {
+    // CPI, SUBI, SBC, ADD and the 0x0300 hole are not SBCI or CPC
+    for word in [0x3000, 0x5000, 0x0800, 0x0BFF, 0x0C00, 0x03FF, 0x0300] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Sbci { .. } | Instruction::Cpc { .. }
+            ),
+            "{word:#06X} must not decode as SBCI or CPC"
+        );
+    }
+    // SBCI and CPC do not decode as each other
+    assert!(!matches!(decode(0x4000), Instruction::Cpc { .. }));
+    assert!(!matches!(decode(0x0400), Instruction::Sbci { .. }));
+    // 0x0000 is still NOP
+    assert!(matches!(decode(0x0000), Instruction::Nop));
+}
+
+#[test]
+fn test_execute_sbci_basic() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 10 / SBCI R16, 5 (carry off, same as SUBI)
+    cpu.load_program(&[0xE00A, 0x4005]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 5);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_sbci_zero_stays_off() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / SBCI R16, 5 : result 0 but Z was off, so Z stays off
+    cpu.load_program(&[0xE005, 0x4005]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_sbci_zero_kept_on() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / SBCI R16, 5 with Z on before : Z stays on
+    cpu.load_program(&[0xE005, 0x4005]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = FLAG_ZERO;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_sbci_carry_in() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / SBCI R16, 5 with C on : 5 - 5 - 1 = 0xFF
+    cpu.load_program(&[0xE005, 0x4005]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = FLAG_CARRY;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0xFF);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_CARRY | FLAG_NEGATIVE | FLAG_HALF_CARRY | FLAG_SIGN
+    );
+}
+
+#[test]
+fn test_execute_sbci_carry_in_overflow() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 128 / SBCI R16, 0 with C on : 128 - 0 - 1 = 127
+    // only the incoming carry makes V (and H) here
+    cpu.load_program(&[0xE800, 0x4000]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = FLAG_CARRY;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0x7F);
+    assert_eq!(cpu.sreg, FLAG_OVERFLOW | FLAG_SIGN | FLAG_HALF_CARRY);
+}
+
+#[test]
+fn test_execute_sbci_high_register() {
+    let mut cpu = Cpu::new();
+    // LDI R31, 0xFF / SBCI R31, 0x0F
+    cpu.load_program(&[0xEFFF, 0x40FF]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[31], 0xF0);
+    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_subi_sbci_chain_16_bits() {
+    let mut cpu = Cpu::new();
+    // R17:R16 = 0x0100 ; SUBI R16, 1 / SBCI R17, 0 : 0x0100 - 1 = 0x00FF
+    // the high byte is 0 but the whole result is not : Z must stay off
+    cpu.load_program(&[0xE000, 0xE011, 0x5001, 0x4010]);
+    step_n(&mut cpu, 4);
+    assert_eq!(cpu.registers[16], 0xFF);
+    assert_eq!(cpu.registers[17], 0x00);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_subi_sbci_chain_16_bits_zero() {
+    let mut cpu = Cpu::new();
+    // R17:R16 = 0x0100 ; SUBI R16, 0 / SBCI R17, 1 : 0x0100 - 0x0100 = 0
+    cpu.load_program(&[0xE000, 0xE011, 0x5000, 0x4011]);
+    step_n(&mut cpu, 4);
+    assert_eq!(cpu.registers[16], 0x00);
+    assert_eq!(cpu.registers[17], 0x00);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_cpc_equal_16_bits() {
+    let mut cpu = Cpu::new();
+    // R17:R16 = 0x0100, R19:R18 = 0x0100
+    // CP R16, R18 / CPC R17, R19
+    cpu.load_program(&[0xE000, 0xE011, 0xE020, 0xE031, 0x1702, 0x0713]);
+    step_n(&mut cpu, 6);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+    // nothing written
+    assert_eq!(cpu.registers[16], 0x00);
+    assert_eq!(cpu.registers[17], 0x01);
+}
+
+#[test]
+fn test_execute_cpc_greater_16_bits() {
+    let mut cpu = Cpu::new();
+    // R17:R16 = 0x0100, R19:R18 = 0x0001 : A > B
+    cpu.load_program(&[0xE000, 0xE011, 0xE021, 0xE030, 0x1702, 0x0713]);
+    step_n(&mut cpu, 6);
+    assert_eq!(cpu.sreg, 0);
+    assert_eq!(cpu.registers[17], 0x01);
+}
+
+#[test]
+fn test_execute_cpc_less_16_bits() {
+    let mut cpu = Cpu::new();
+    // R17:R16 = 0x0001, R19:R18 = 0x0100 : A < B
+    cpu.load_program(&[0xE001, 0xE010, 0xE020, 0xE031, 0x1702, 0x0713]);
+    step_n(&mut cpu, 6);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_CARRY | FLAG_NEGATIVE | FLAG_HALF_CARRY | FLAG_SIGN
+    );
+    // CPC must not write : R17 is still 0 (it would be 0xFF otherwise)
+    assert_eq!(cpu.registers[17], 0x00);
+}
+
+#[test]
+fn test_execute_cpc_low_byte_differs() {
+    let mut cpu = Cpu::new();
+    // R17:R16 = 0x0001, R19:R18 = 0x0000 : high bytes are equal, but the
+    // low bytes are not, so Z must stay off
+    cpu.load_program(&[0xE001, 0xE010, 0xE020, 0xE030, 0x1702, 0x0713]);
+    step_n(&mut cpu, 6);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_sbci_cpc_keep_i_t() {
+    // SBCI R16, 5 on 10 with I and T on : result 5, no flag of its own
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE00A, 0x4005]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xC0);
+
+    // SBCI R16, 0x0F on 0xFF, every flag on before : 0xFF - 0x0F - 1 = 0xEF
+    // I, T kept ; H, N, S on ; C, V, Z off
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xEF0F, 0x400F]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0xEF);
+    assert_eq!(cpu.sreg, 0xF4);
+
+    // CPC R16, R17 on 0xFF and 0x0F, every flag on before : same flags,
+    // and R16 untouched
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xEF0F, 0xE01F, 0x0701]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0xFF);
+    assert_eq!(cpu.sreg, 0xF4);
 }

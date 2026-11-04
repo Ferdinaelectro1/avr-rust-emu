@@ -26,6 +26,8 @@ enum Instruction {
     Cpi { rd: u8, k: u8 },
     Andi { rd: u8, k: u8 },
     Ori { rd: u8, k: u8 },
+    Sbci { rd: u8, k: u8 },
+    Cpc { rd: u8, rr: u8 },
     Unknown(u16),
 }
 
@@ -113,6 +115,14 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xF000 == 0x6000 => {
             let (reg, imm) = decode_reg_imm(w);
             Instruction::Ori { rd: reg, k: imm }
+        }
+        w if w & 0xF000 == 0x4000 => {
+            let (reg, imm) = decode_reg_imm(w);
+            Instruction::Sbci { rd: reg, k: imm }
+        }
+        w if w & 0xFC00 == 0x0400 => {
+            let (dest, src) = decode_dest_src(w);
+            Instruction::Cpc { rd: dest, rr: src }
         }
         _ => Instruction::Unknown(word),
     }
@@ -345,6 +355,33 @@ impl Cpu {
             Instruction::Ori { rd, k } => {
                 self.registers[rd as usize] |= k;
                 self.update_flags_logic(self.registers[rd as usize]);
+                Ok(())
+            }
+            Instruction::Sbci { rd, k } => {
+                let op_a = self.registers[rd as usize];
+                let op_b = k;
+                let last_carry_on = self.sreg & FLAG_CARRY != 0;
+                let last_zero_off = self.sreg & FLAG_ZERO == 0;
+                let (res, c1) = overflowing_sub(op_a, op_b);
+                let (res, c2) = overflowing_sub(res, if last_carry_on { 1 } else { 0 });
+                self.registers[rd as usize] = res;
+                self.update_flags_sub(op_a, op_b, res, c1 | c2, last_carry_on);
+                if last_zero_off {
+                    self.sreg &= !(FLAG_ZERO);
+                }
+                Ok(())
+            }
+            Instruction::Cpc { rd, rr } => {
+                let op_a = self.registers[rd as usize];
+                let op_b = self.registers[rr as usize];
+                let last_carry_on = self.sreg & FLAG_CARRY != 0;
+                let last_zero_off = self.sreg & FLAG_ZERO == 0;
+                let (res, c1) = overflowing_sub(op_a, op_b);
+                let (res, c2) = overflowing_sub(res, if last_carry_on { 1 } else { 0 });
+                self.update_flags_sub(op_a, op_b, res, c1 | c2, last_carry_on);
+                if last_zero_off {
+                    self.sreg &= !(FLAG_ZERO);
+                }
                 Ok(())
             }
         }
