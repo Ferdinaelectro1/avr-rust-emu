@@ -346,6 +346,15 @@ fn test_decode_shifts() {
     assert_eq!(decode(0x95F7), Instruction::Ror { rd: 31 });
 }
 
+//SWAP Rd
+#[test]
+fn test_decode_swap() {
+    // SWAP R16 / R0 / R31
+    assert_eq!(decode(0x9502), Instruction::Swap { rd: 16 });
+    assert_eq!(decode(0x9402), Instruction::Swap { rd: 0 });
+    assert_eq!(decode(0x95F2), Instruction::Swap { rd: 31 });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -2254,4 +2263,90 @@ fn test_execute_shifts_flag_preservation() {
     let cpu = run_unary(0xE004, 0x9507, 0xFF);
     assert_eq!(cpu.registers[16], 0x82);
     assert_eq!(cpu.sreg, 0xEC);
+}
+
+#[test]
+fn test_decode_swap_neighbours() {
+    // COM, NEG, INC, ASR, SEC are not SWAP
+    for word in [0x9400, 0x9401, 0x9403, 0x9405, 0x9408] {
+        assert!(
+            !matches!(decode(word), Instruction::Swap { .. }),
+            "{word:#06X} must not decode as SWAP"
+        );
+    }
+    // 0x9404 is still not an instruction
+    assert!(matches!(decode(0x9404), Instruction::Unknown { .. }));
+    // the other members of the group are still decoded
+    assert_eq!(decode(0x9500), Instruction::Com { rd: 16 });
+    assert_eq!(decode(0x9501), Instruction::Neg { rd: 16 });
+    assert_eq!(decode(0x9503), Instruction::Inc { rd: 16 });
+}
+
+#[test]
+fn test_execute_swap() {
+    // SWAP R16 = 0x9502 ; LDI R16, x : 0xEA0B (0xAB), 0xE00F (0x0F), 0xEF00 (0xF0),
+    // 0xE000 (0x00), 0xEF0F (0xFF), 0xE800 (0x80), 0xE008 (0x08)
+    // different nibbles : catches a swap done on one half only
+    let cpu = run_unary(0xEA0B, 0x9502, 0);
+    assert_eq!((cpu.registers[16], cpu.sreg), (0xBA, 0), "SWAP 0xAB");
+
+    // result has bit 7 on : N must stay off
+    let cpu = run_unary(0xE00F, 0x9502, 0);
+    assert_eq!((cpu.registers[16], cpu.sreg), (0xF0, 0), "SWAP 0x0F");
+
+    let cpu = run_unary(0xEF00, 0x9502, 0);
+    assert_eq!((cpu.registers[16], cpu.sreg), (0x0F, 0), "SWAP 0xF0");
+
+    // zero result : Z must stay off
+    let cpu = run_unary(0xE000, 0x9502, 0);
+    assert_eq!((cpu.registers[16], cpu.sreg), (0x00, 0), "SWAP 0x00");
+
+    let cpu = run_unary(0xEF0F, 0x9502, 0);
+    assert_eq!((cpu.registers[16], cpu.sreg), (0xFF, 0), "SWAP 0xFF");
+
+    let cpu = run_unary(0xE800, 0x9502, 0);
+    assert_eq!((cpu.registers[16], cpu.sreg), (0x08, 0), "SWAP 0x80");
+
+    let cpu = run_unary(0xE008, 0x9502, 0);
+    assert_eq!((cpu.registers[16], cpu.sreg), (0x80, 0), "SWAP 0x08");
+}
+
+#[test]
+fn test_execute_swap_twice() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xAB / SWAP R16 / SWAP R16 : back to the start
+    cpu.load_program(&[0xEA0B, 0x9502, 0x9502]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0xAB);
+}
+
+#[test]
+fn test_execute_swap_high_register() {
+    let mut cpu = Cpu::new();
+    // LDI R31, 0xAB / SWAP R31 : the 5 bits of Rd go all the way up
+    cpu.load_program(&[0xEAFB, 0x95F2]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[31], 0xBA);
+}
+
+#[test]
+fn test_execute_swap_other_register_untouched() {
+    let mut cpu = Cpu::new();
+    // LDI R17, 0x12 / LDI R16, 0xAB / SWAP R16 : R17 must not move
+    cpu.load_program(&[0xE112, 0xEA0B, 0x9502]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0xBA);
+    assert_eq!(cpu.registers[17], 0x12);
+}
+
+#[test]
+fn test_execute_swap_keeps_all_flags() {
+    // every flag on before : SWAP must not touch SREG at all
+    let cpu = run_unary(0xEA0B, 0x9502, 0xFF);
+    assert_eq!(cpu.registers[16], 0xBA);
+    assert_eq!(cpu.sreg, 0xFF);
+
+    // every flag off before : still off
+    let cpu = run_unary(0xEA0B, 0x9502, 0x00);
+    assert_eq!(cpu.sreg, 0x00);
 }

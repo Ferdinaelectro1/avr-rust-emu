@@ -33,6 +33,7 @@ enum Instruction {
     Lsr { rd: u8 },
     Asr { rd: u8 },
     Ror { rd: u8 },
+    Swap { rd: u8 },
     Unknown(u16),
 }
 
@@ -130,6 +131,7 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFE0F == 0x9406 => Instruction::Lsr { rd: decode_dest(w) },
         w if w & 0xFE0F == 0x9405 => Instruction::Asr { rd: decode_dest(w) },
         w if w & 0xFE0F == 0x9407 => Instruction::Ror { rd: decode_dest(w) },
+        w if w & 0xFE0F == 0x9402 => Instruction::Swap { rd: decode_dest(w) },
         _ => Instruction::Unknown(word),
     }
 }
@@ -430,6 +432,11 @@ impl Cpu {
                     self.registers[rd as usize] |= 0x80; //turn on 7 bit
                 }
                 self.update_flags_shift(self.registers[rd as usize], carry);
+                Ok(())
+            }
+            Instruction::Swap { rd } => {
+                self.registers[rd as usize] = ((self.registers[rd as usize] >> 4) & 0x0F)
+                    | ((self.registers[rd as usize] << 4) & 0xF0);
                 Ok(())
             }
         }
