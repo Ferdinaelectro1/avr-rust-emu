@@ -22,6 +22,8 @@ enum Instruction {
     Mov { rd: u8, rr: u8 },
     Adc { rd: u8, rr: u8 },
     Sbc { rd: u8, rr: u8 },
+    Subi { rd: u8, k: u8 },
+    Cpi { rd: u8, k: u8 },
     Unknown(u16),
 }
 
@@ -29,10 +31,8 @@ fn decode(word: u16) -> Instruction {
     match word {
         0x0000 => Instruction::Nop,
         w if w & 0xF000 == 0xE000 => {
-            Instruction::Ldi {
-                dest: ((w >> 4) & 0x000F) as u8 + 16, //R16 to R31
-                k: (((w >> 4) & 0x00F0) | (w & 0x000F)) as u8,
-            }
+            let (reg, imm) = decode_reg_imm(w);
+            Instruction::Ldi { dest: reg, k: imm }
         }
         w if w & 0xFC00 == 0x0C00 => {
             let (dest, src) = decode_dest_src(w);
@@ -96,6 +96,14 @@ fn decode(word: u16) -> Instruction {
             let (dest, src) = decode_dest_src(w);
             Instruction::Sbc { rd: dest, rr: src }
         }
+        w if w & 0xF000 == 0x5000 => {
+            let (reg, imm) = decode_reg_imm(w);
+            Instruction::Subi { rd: reg, k: imm }
+        }
+        w if w & 0xF000 == 0x3000 => {
+            let (reg, imm) = decode_reg_imm(w);
+            Instruction::Cpi { rd: reg, k: imm }
+        }
         _ => Instruction::Unknown(word),
     }
 }
@@ -113,6 +121,13 @@ fn decode_dest_src(word: u16) -> (u8, u8) {
     (
         (((word >> 4) & 0x001F) as u8),
         (((word >> 5) & 0x0010) | (word & 0x000F)) as u8,
+    )
+}
+
+fn decode_reg_imm(word: u16) -> (u8, u8) {
+    (
+        ((word >> 4) & 0x000F) as u8 + 16, //R16 to R31
+        (((word >> 4) & 0x00F0) | (word & 0x000F)) as u8,
     )
 }
 
@@ -295,6 +310,21 @@ impl Cpu {
                 if last_zero_off {
                     self.sreg &= !(FLAG_ZERO);
                 }
+                Ok(())
+            }
+            Instruction::Subi { rd, k } => {
+                let op_a = self.registers[rd as usize];
+                let op_b = k;
+                let (res, carry) = overflowing_sub(op_a, op_b);
+                self.registers[rd as usize] = res;
+                self.update_flags_sub(op_a, op_b, res, carry, false);
+                Ok(())
+            }
+            Instruction::Cpi { rd, k } => {
+                let op_a = self.registers[rd as usize];
+                let op_b = k;
+                let (res, carry) = overflowing_sub(op_a, op_b);
+                self.update_flags_sub(op_a, op_b, res, carry, false);
                 Ok(())
             }
         }

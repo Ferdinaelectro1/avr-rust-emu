@@ -261,6 +261,25 @@ fn test_decode_adc_sbc() {
     assert_eq!(decode(0x0BFF), Instruction::Sbc { rd: 31, rr: 31 });
 }
 
+//Subi rd, k
+//Cpi  rd, k
+#[test]
+fn test_decode_subi_cpi() {
+    // SUBI R16, 5 / SUBI R16, 0x80 / SUBI R16, 0xFF / SUBI R31, 0xFF
+    assert_eq!(decode(0x5005), Instruction::Subi { rd: 16, k: 5 });
+    assert_eq!(decode(0x5800), Instruction::Subi { rd: 16, k: 0x80 });
+    assert_eq!(decode(0x5F0F), Instruction::Subi { rd: 16, k: 0xFF });
+    assert_eq!(decode(0x5FFF), Instruction::Subi { rd: 31, k: 0xFF });
+    // a constant with different high and low nibbles : SUBI R19, 0xAC
+    assert_eq!(decode(0x5A3C), Instruction::Subi { rd: 19, k: 0xAC });
+    // CPI R16, 5 / CPI R16, 0 / CPI R31, 0xFF
+    assert_eq!(decode(0x3005), Instruction::Cpi { rd: 16, k: 5 });
+    assert_eq!(decode(0x3000), Instruction::Cpi { rd: 16, k: 0 });
+    assert_eq!(decode(0x3FFF), Instruction::Cpi { rd: 31, k: 0xFF });
+    // CPI R19, 0xAC
+    assert_eq!(decode(0x3A3C), Instruction::Cpi { rd: 19, k: 0xAC });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -1344,6 +1363,148 @@ fn test_execute_adc_sbc_keep_i_t() {
     let mut cpu = Cpu::new();
     cpu.load_program(&[0xE005, 0xE013, 0x0B01]);
     step_n(&mut cpu, 2);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+}
+
+#[test]
+fn test_decode_subi_cpi_neighbours() {
+    // SBCI, ORI, ANDI are not implemented yet : they must not decode as SUBI or CPI
+    for word in [0x4000, 0x6000, 0x7000, 0x4FFF] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Subi { .. } | Instruction::Cpi { .. }
+            ),
+            "{word:#06X} must not decode as SUBI or CPI"
+        );
+    }
+    // SUBI and CPI do not decode as each other
+    assert!(!matches!(decode(0x5005), Instruction::Cpi { .. }));
+    assert!(!matches!(decode(0x3005), Instruction::Subi { .. }));
+}
+
+#[test]
+fn test_execute_subi_half_carry() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 20 / SUBI R16, 5
+    cpu.load_program(&[0xE104, 0x5005]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 15);
+    assert_eq!(cpu.sreg, FLAG_HALF_CARRY);
+}
+
+#[test]
+fn test_execute_subi_zero() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / SUBI R16, 5
+    cpu.load_program(&[0xE005, 0x5005]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_subi_borrow() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / SUBI R16, 10 : 251, C N H S
+    cpu.load_program(&[0xE005, 0x500A]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 251);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_CARRY | FLAG_NEGATIVE | FLAG_HALF_CARRY | FLAG_SIGN
+    );
+}
+
+#[test]
+fn test_execute_subi_overflow_with_carry() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 127 / SUBI R16, 255 : 128, C N V
+    cpu.load_program(&[0xE70F, 0x5F0F]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 128);
+    assert_eq!(cpu.sreg, FLAG_CARRY | FLAG_NEGATIVE | FLAG_OVERFLOW);
+}
+
+#[test]
+fn test_execute_subi_overflow() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 128 / SUBI R16, 1 : 127, H V S
+    cpu.load_program(&[0xE800, 0x5001]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 127);
+    assert_eq!(cpu.sreg, FLAG_HALF_CARRY | FLAG_OVERFLOW | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_subi_high_register() {
+    let mut cpu = Cpu::new();
+    // LDI R31, 5 / SUBI R31, 5
+    cpu.load_program(&[0xE0F5, 0x50F5]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[31], 0);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_subi_adds_with_negative_constant() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / SUBI R16, 0xFF : subtracting -1 adds 1, the compiler's way of adding
+    cpu.load_program(&[0xE005, 0x5F0F]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 6);
+}
+
+#[test]
+fn test_execute_cpi_equal() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / CPI R16, 5
+    cpu.load_program(&[0xE005, 0x3005]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 5);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_cpi_lower() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / CPI R16, 10 : C N H S, R16 untouched
+    cpu.load_program(&[0xE005, 0x300A]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 5);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_CARRY | FLAG_NEGATIVE | FLAG_HALF_CARRY | FLAG_SIGN
+    );
+}
+
+#[test]
+fn test_execute_cpi_brne_loop() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / CPI R16, 5 / BREQ +1 / LDI R17, 1 (skipped) / LDI R18, 2
+    cpu.load_program(&[0xE005, 0x3005, 0xF009, 0xE011, 0xE022]);
+    step_n(&mut cpu, 4);
+    assert_eq!(cpu.registers[17], 0);
+    assert_eq!(cpu.registers[18], 2);
+    assert_eq!(cpu.pc, 5);
+}
+
+#[test]
+fn test_execute_subi_cpi_keep_i_t_only() {
+    // SUBI R16, 3 on 5 : result 2, no flag, every flag on before
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE005, 0x5003]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+
+    // CPI R16, 3 on 5, same check
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE005, 0x3003]);
+    step_n(&mut cpu, 1);
     cpu.sreg = 0xFF;
     step_n(&mut cpu, 1);
     assert_eq!(cpu.sreg, FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
