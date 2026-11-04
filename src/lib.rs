@@ -28,6 +28,8 @@ enum Instruction {
     Ori { rd: u8, k: u8 },
     Sbci { rd: u8, k: u8 },
     Cpc { rd: u8, rr: u8 },
+    Com { rd: u8 },
+    Neg { rd: u8 },
     Unknown(u16),
 }
 
@@ -70,12 +72,8 @@ fn decode(word: u16) -> Instruction {
             s: (w & 0x0007) as u8,
             k: sign_extend(w >> 3, 7) as i8,
         },
-        w if w & 0xFE0F == 0x9403 => Instruction::Inc {
-            rd: ((w >> 4) & 0x001F) as u8,
-        },
-        w if w & 0xFE0F == 0x940A => Instruction::Dec {
-            rd: ((w >> 4) & 0x001F) as u8,
-        },
+        w if w & 0xFE0F == 0x9403 => Instruction::Inc { rd: decode_dest(w) },
+        w if w & 0xFE0F == 0x940A => Instruction::Dec { rd: decode_dest(w) },
         w if w & 0xFC00 == 0x2000 => {
             let (dest, src) = decode_dest_src(w);
             Instruction::And { rd: dest, rr: src }
@@ -124,6 +122,8 @@ fn decode(word: u16) -> Instruction {
             let (dest, src) = decode_dest_src(w);
             Instruction::Cpc { rd: dest, rr: src }
         }
+        w if w & 0xFE0F == 0x9400 => Instruction::Com { rd: decode_dest(w) },
+        w if w & 0xFE0F == 0x9401 => Instruction::Neg { rd: decode_dest(w) },
         _ => Instruction::Unknown(word),
     }
 }
@@ -149,6 +149,10 @@ fn decode_reg_imm(word: u16) -> (u8, u8) {
         ((word >> 4) & 0x000F) as u8 + 16, //R16 to R31
         (((word >> 4) & 0x00F0) | (word & 0x000F)) as u8,
     )
+}
+
+fn decode_dest(word: u16) -> u8 {
+    ((word >> 4) & 0x001F) as u8
 }
 
 fn sign_extend(value: u16, bits: u32) -> i16 {
@@ -382,6 +386,20 @@ impl Cpu {
                 if last_zero_off {
                     self.sreg &= !(FLAG_ZERO);
                 }
+                Ok(())
+            }
+            Instruction::Com { rd } => {
+                self.registers[rd as usize] = !self.registers[rd as usize];
+                self.update_flags_logic(self.registers[rd as usize]);
+                self.sreg |= FLAG_CARRY;
+                Ok(())
+            }
+            Instruction::Neg { rd } => {
+                let op_a = 0;
+                let op_b = self.registers[rd as usize];
+                let (res, carry) = overflowing_sub(op_a, op_b);
+                self.registers[rd as usize] = res;
+                self.update_flags_sub(op_a, op_b, res, carry, false);
                 Ok(())
             }
         }

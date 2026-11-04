@@ -314,6 +314,20 @@ fn test_decode_sbci_cpc() {
     assert_eq!(decode(0x0713), Instruction::Cpc { rd: 17, rr: 19 });
 }
 
+//COM Rd
+//NEG Rd
+#[test]
+fn test_decode_com_neg() {
+    // COM R16 / COM R0 / COM R31
+    assert_eq!(decode(0x9500), Instruction::Com { rd: 16 });
+    assert_eq!(decode(0x9400), Instruction::Com { rd: 0 });
+    assert_eq!(decode(0x95F0), Instruction::Com { rd: 31 });
+    // NEG R16 / NEG R0 / NEG R31
+    assert_eq!(decode(0x9501), Instruction::Neg { rd: 16 });
+    assert_eq!(decode(0x9401), Instruction::Neg { rd: 0 });
+    assert_eq!(decode(0x95F1), Instruction::Neg { rd: 31 });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -1859,4 +1873,162 @@ fn test_execute_sbci_cpc_keep_i_t() {
     step_n(&mut cpu, 1);
     assert_eq!(cpu.registers[16], 0xFF);
     assert_eq!(cpu.sreg, 0xF4);
+}
+
+#[test]
+fn test_decode_com_neg_neighbours() {
+    // SWAP, INC, ASR, DEC, SEC and the 0x9000 group are not COM or NEG
+    for word in [0x9402, 0x9403, 0x9405, 0x940A, 0x9408, 0x9000] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Com { .. } | Instruction::Neg { .. }
+            ),
+            "{word:#06X} must not decode as COM or NEG"
+        );
+    }
+    // COM and NEG do not decode as each other
+    assert!(!matches!(decode(0x9500), Instruction::Neg { .. }));
+    assert!(!matches!(decode(0x9501), Instruction::Com { .. }));
+    // INC and DEC are still decoded
+    assert_eq!(decode(0x9503), Instruction::Inc { rd: 16 });
+    assert_eq!(decode(0x950A), Instruction::Dec { rd: 16 });
+}
+
+#[test]
+fn test_execute_com_zero() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0x00 / COM R16 : C always on, N and S, no V
+    cpu.load_program(&[0xE000, 0x9500]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0xFF);
+    assert_eq!(cpu.sreg, FLAG_CARRY | FLAG_NEGATIVE | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_com_ff() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xFF / COM R16 : C and Z together
+    cpu.load_program(&[0xEF0F, 0x9500]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0x00);
+    assert_eq!(cpu.sreg, FLAG_CARRY | FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_com_low_nibble() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0x0F / COM R16
+    cpu.load_program(&[0xE00F, 0x9500]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0xF0);
+    assert_eq!(cpu.sreg, FLAG_CARRY | FLAG_NEGATIVE | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_com_high_nibble() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xF0 / COM R16 : only C
+    cpu.load_program(&[0xEF00, 0x9500]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0x0F);
+    assert_eq!(cpu.sreg, FLAG_CARRY);
+}
+
+#[test]
+fn test_execute_com_twice() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xAC is 0xEA0C / COM R16 / COM R16 : back to the start
+    cpu.load_program(&[0xEA0C, 0x9500, 0x9500]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0xAC);
+}
+
+#[test]
+fn test_execute_neg_basic() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / NEG R16 : 0 - 5 = 0xFB
+    cpu.load_program(&[0xE005, 0x9501]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0xFB);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_CARRY | FLAG_NEGATIVE | FLAG_HALF_CARRY | FLAG_SIGN
+    );
+}
+
+#[test]
+fn test_execute_neg_one() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 1 / NEG R16 : 0 - 1 = 0xFF
+    cpu.load_program(&[0xE001, 0x9501]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0xFF);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_CARRY | FLAG_NEGATIVE | FLAG_HALF_CARRY | FLAG_SIGN
+    );
+}
+
+#[test]
+fn test_execute_neg_zero() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0 / NEG R16 : only Z, no carry
+    cpu.load_program(&[0xE000, 0x9501]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0x00);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_neg_min() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0x80 / NEG R16 : no opposite on 8 bits, V on and so S off
+    cpu.load_program(&[0xE800, 0x9501]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0x80);
+    assert_eq!(cpu.sreg, FLAG_CARRY | FLAG_NEGATIVE | FLAG_OVERFLOW);
+}
+
+#[test]
+fn test_execute_neg_no_half_carry() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0x10 / NEG R16 : low nibble is 0, so no H
+    cpu.load_program(&[0xE100, 0x9501]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0xF0);
+    assert_eq!(cpu.sreg, FLAG_CARRY | FLAG_NEGATIVE | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_neg_ff() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xFF / NEG R16 : 0 - 0xFF = 1
+    cpu.load_program(&[0xEF0F, 0x9501]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0x01);
+    assert_eq!(cpu.sreg, FLAG_CARRY | FLAG_HALF_CARRY);
+}
+
+#[test]
+fn test_execute_com_neg_flag_preservation() {
+    // COM R16 on 0xF0 (result 0x0F), every flag on before :
+    // I, T, H kept ; C on ; Z, N, V, S cleared
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xEF00, 0x9500]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0x0F);
+    assert_eq!(cpu.sreg, 0xE1);
+
+    // NEG R16 on 0x10 (result 0xF0), every flag on before :
+    // only I and T kept ; H is recomputed (off here) ; C, N, S on
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE100, 0x9501]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0xF0);
+    assert_eq!(cpu.sreg, 0xD5);
 }
