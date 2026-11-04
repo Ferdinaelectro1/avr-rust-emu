@@ -248,6 +248,19 @@ fn test_decode_mov() {
     assert_eq!(decode(0x2FFF), Instruction::Mov { rd: 31, rr: 31 });
 }
 
+//Adc rd, rr
+//Sbc rd, rr
+#[test]
+fn test_decode_adc_sbc() {
+    assert_eq!(decode(0x1F01), Instruction::Adc { rd: 16, rr: 17 });
+    assert_eq!(decode(0x1F23), Instruction::Adc { rd: 18, rr: 19 });
+    assert_eq!(decode(0x1C00), Instruction::Adc { rd: 0, rr: 0 });
+    assert_eq!(decode(0x1FFF), Instruction::Adc { rd: 31, rr: 31 });
+    assert_eq!(decode(0x0B01), Instruction::Sbc { rd: 16, rr: 17 });
+    assert_eq!(decode(0x0800), Instruction::Sbc { rd: 0, rr: 0 });
+    assert_eq!(decode(0x0BFF), Instruction::Sbc { rd: 31, rr: 31 });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -1164,4 +1177,174 @@ fn test_execute_mov_does_not_touch_sreg() {
     step_n(&mut cpu, 1);
     // nothing is cleared, unlike INC and AND (0xE1)
     assert_eq!(cpu.sreg, 0xFF);
+}
+
+#[test]
+fn test_decode_adc_sbc_neighbours() {
+    // SUB, CP, CPSE next to ADC ; ADD, CPC next to SBC
+    for word in [0x1BFF, 0x17FF, 0x1000] {
+        assert!(!matches!(decode(word), Instruction::Adc { .. }));
+    }
+    for word in [0x0C00, 0x07FF, 0x0400] {
+        assert!(!matches!(decode(word), Instruction::Sbc { .. }));
+    }
+}
+
+#[test]
+fn test_execute_adc_carry_off_is_add() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / LDI R17, 7 / ADC R16, R17 (C = 0)
+    cpu.load_program(&[0xE005, 0xE017, 0x1F01]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 12);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_adc_carry_on_adds_one() {
+    let mut cpu = Cpu::new();
+    // same program, C = 1 before ADC : 5 + 7 + 1
+    cpu.load_program(&[0xE005, 0xE017, 0x1F01]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = FLAG_CARRY;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 13);
+    // the old carry is consumed, not kept
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_adc_carry_out_with_carry_off() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 200 / LDI R17, 100 / ADC R16, R17 : 300 -> 44, C
+    cpu.load_program(&[0xEC08, 0xE614, 0x1F01]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 44);
+    assert_eq!(cpu.sreg, FLAG_CARRY);
+}
+
+#[test]
+fn test_execute_adc_carry_in_makes_carry_out() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 255 / LDI R17, 0 / ADC R16, R17 with C = 1 : 256 -> 0, C Z H
+    cpu.load_program(&[0xEF0F, 0xE010, 0x1F01]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = FLAG_CARRY;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.sreg, FLAG_CARRY | FLAG_ZERO | FLAG_HALF_CARRY);
+}
+
+#[test]
+fn test_execute_adc_carry_in_makes_overflow() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 127 / LDI R17, 0 / ADC R16, R17 with C = 1 : 128, N V H
+    cpu.load_program(&[0xE70F, 0xE010, 0x1F01]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = FLAG_CARRY;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 128);
+    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_OVERFLOW | FLAG_HALF_CARRY);
+}
+
+#[test]
+fn test_execute_adc_16_bit_addition() {
+    let mut cpu = Cpu::new();
+    // 0x01FF + 0x0001 : LDI R16, 255 / LDI R17, 1 / LDI R18, 1 / LDI R19, 0
+    // ADD R16, R17 / ADC R18, R19
+    cpu.load_program(&[0xEF0F, 0xE011, 0xE021, 0xE030, 0x0F01, 0x1F23]);
+    step_n(&mut cpu, 6);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.registers[18], 2);
+}
+
+#[test]
+fn test_execute_sbc_carry_off_is_sub() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / LDI R17, 3 / SBC R16, R17 (C = 0)
+    cpu.load_program(&[0xE005, 0xE013, 0x0B01]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 2);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_sbc_carry_on_subtracts_one() {
+    let mut cpu = Cpu::new();
+    // same program, C = 1 before SBC : 5 - 3 - 1
+    cpu.load_program(&[0xE005, 0xE013, 0x0B01]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = FLAG_CARRY;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 1);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_sbc_borrow_from_carry_in() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / LDI R17, 5 / SBC R16, R17 with C = 1 : 255, C N H S
+    cpu.load_program(&[0xE005, 0xE015, 0x0B01]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = FLAG_CARRY;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 255);
+    assert_eq!(
+        cpu.sreg,
+        FLAG_CARRY | FLAG_NEGATIVE | FLAG_HALF_CARRY | FLAG_SIGN
+    );
+}
+
+#[test]
+fn test_execute_sbc_zero_stays_on_if_it_was_on() {
+    let mut cpu = Cpu::new();
+    // 5 - 5 - 0 = 0 with Z already on : Z stays on
+    cpu.load_program(&[0xE005, 0xE015, 0x0B01]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = FLAG_ZERO;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_sbc_zero_is_not_set_if_it_was_off() {
+    let mut cpu = Cpu::new();
+    // 5 - 5 - 0 = 0 with Z off : Z must NOT be set
+    cpu.load_program(&[0xE005, 0xE015, 0x0B01]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_sbc_16_bit_subtraction() {
+    let mut cpu = Cpu::new();
+    // 0x0100 - 0x0001 : LDI R16, 0 / LDI R17, 1 / LDI R18, 1 / LDI R19, 0
+    // SUB R16, R18 / SBC R17, R19
+    cpu.load_program(&[0xE000, 0xE011, 0xE021, 0xE030, 0x1B02, 0x0B13]);
+    step_n(&mut cpu, 6);
+    assert_eq!(cpu.registers[16], 255);
+    assert_eq!(cpu.registers[17], 0);
+    // the result is 0x00FF, not zero : Z must be off
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_adc_sbc_keep_i_t() {
+    let mut cpu = Cpu::new();
+    // ADC 5 + 7 + 1 with every flag on before
+    cpu.load_program(&[0xE005, 0xE017, 0x1F01]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+
+    // SBC 5 - 3 - 1 with every flag on before
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE005, 0xE013, 0x0B01]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
 }

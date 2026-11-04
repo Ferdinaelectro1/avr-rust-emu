@@ -20,6 +20,8 @@ enum Instruction {
     Or { rd: u8, rr: u8 },
     Eor { rd: u8, rr: u8 },
     Mov { rd: u8, rr: u8 },
+    Adc { rd: u8, rr: u8 },
+    Sbc { rd: u8, rr: u8 },
     Unknown(u16),
 }
 
@@ -85,6 +87,14 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFC00 == 0x2C00 => {
             let (dest, src) = decode_dest_src(w);
             Instruction::Mov { rd: dest, rr: src }
+        }
+        w if w & 0xFC00 == 0x1C00 => {
+            let (dest, src) = decode_dest_src(w);
+            Instruction::Adc { rd: dest, rr: src }
+        }
+        w if w & 0xFC00 == 0x0800 => {
+            let (dest, src) = decode_dest_src(w);
+            Instruction::Sbc { rd: dest, rr: src }
         }
         _ => Instruction::Unknown(word),
     }
@@ -196,7 +206,7 @@ impl Cpu {
                 let op_b = self.registers[src as usize];
                 let (res, carry) = overflowing_add(op_a, op_b);
                 self.registers[dest as usize] = res;
-                self.update_flags_add(op_a, op_b, res, carry);
+                self.update_flags_add(op_a, op_b, res, carry, false);
                 Ok(())
             }
             Instruction::Sub { dest, src } => {
@@ -204,14 +214,14 @@ impl Cpu {
                 let op_b = self.registers[src as usize];
                 let (res, carry) = overflowing_sub(op_a, op_b);
                 self.registers[dest as usize] = res;
-                self.update_flags_sub(op_a, op_b, res, carry);
+                self.update_flags_sub(op_a, op_b, res, carry, false);
                 Ok(())
             }
             Instruction::Cp { dest, src } => {
                 let op_a = self.registers[dest as usize];
                 let op_b = self.registers[src as usize];
                 let (res, carry) = overflowing_sub(op_a, op_b);
-                self.update_flags_sub(op_a, op_b, res, carry);
+                self.update_flags_sub(op_a, op_b, res, carry, false);
                 Ok(())
             }
             Instruction::Ldi { dest, k } => {
@@ -261,6 +271,30 @@ impl Cpu {
             }
             Instruction::Mov { rd, rr } => {
                 self.registers[rd as usize] = self.registers[rr as usize];
+                Ok(())
+            }
+            Instruction::Adc { rd, rr } => {
+                let op_a = self.registers[rd as usize];
+                let op_b = self.registers[rr as usize];
+                let last_carry_on = self.sreg & FLAG_CARRY != 0;
+                let (res, c1) = overflowing_add(op_a, op_b);
+                let (res, c2) = overflowing_add(res, if last_carry_on { 1 } else { 0 });
+                self.registers[rd as usize] = res;
+                self.update_flags_add(op_a, op_b, res, c1 | c2, last_carry_on);
+                Ok(())
+            }
+            Instruction::Sbc { rd, rr } => {
+                let op_a = self.registers[rd as usize];
+                let op_b = self.registers[rr as usize];
+                let last_carry_on = self.sreg & FLAG_CARRY != 0;
+                let last_zero_off = self.sreg & FLAG_ZERO == 0;
+                let (res, c1) = overflowing_sub(op_a, op_b);
+                let (res, c2) = overflowing_sub(res, if last_carry_on { 1 } else { 0 });
+                self.registers[rd as usize] = res;
+                self.update_flags_sub(op_a, op_b, res, c1 | c2, last_carry_on);
+                if last_zero_off {
+                    self.sreg &= !(FLAG_ZERO);
+                }
                 Ok(())
             }
         }
@@ -317,7 +351,7 @@ impl Cpu {
         println!("{:-<width$}", "");
     }
 
-    fn update_flags_add(&mut self, op_a: u8, op_b: u8, res: u8, carry: bool) {
+    fn update_flags_add(&mut self, op_a: u8, op_b: u8, res: u8, carry: bool, in_carry: bool) {
         self.sreg &= FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE; //We clear all flags without T and I flags
         if carry {
             self.sreg |= FLAG_CARRY;
@@ -325,7 +359,7 @@ impl Cpu {
         if res & 0x80 != 0 {
             self.sreg |= FLAG_NEGATIVE;
         }
-        if (((op_a & 0x0F) + (op_b & 0x0F)) & 0x10) != 0 {
+        if (((op_a & 0x0F) + (op_b & 0x0F) + if in_carry { 1 } else { 0 }) & 0x10) != 0 {
             self.sreg |= FLAG_HALF_CARRY;
         }
         if ((res & 0x80 != 0) && (op_a & 0x80 == 0) && (op_b & 0x80 == 0))
@@ -343,7 +377,7 @@ impl Cpu {
         }
     }
 
-    fn update_flags_sub(&mut self, op_a: u8, op_b: u8, res: u8, carry: bool) {
+    fn update_flags_sub(&mut self, op_a: u8, op_b: u8, res: u8, carry: bool, in_carry: bool) {
         self.sreg &= FLAG_BIT_COPY | FLAG_INTERRUPT_ENABLE; //We clear all flags without T and I flags
         if carry {
             self.sreg |= FLAG_CARRY;
@@ -354,7 +388,7 @@ impl Cpu {
         if res & 0x80 != 0 {
             self.sreg |= FLAG_NEGATIVE;
         }
-        if (op_a & 0x0F) < (op_b & 0x0F) {
+        if (op_a & 0x0F) < ((op_b & 0x0F) + if in_carry { 1 } else { 0 }) {
             self.sreg |= FLAG_HALF_CARRY;
         }
         if ((res & 0x80 != 0) && (op_b & 0x80 != 0) && (op_a & 0x80 == 0))
