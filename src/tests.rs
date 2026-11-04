@@ -236,6 +236,18 @@ fn test_decode_logic() {
     assert_eq!(decode(0x23FF), Instruction::And { rd: 31, rr: 31 });
 }
 
+//Mov Rd, Rr
+#[test]
+fn test_decode_mov() {
+    // MOV R16, R17 / MOV R0, R17
+    assert_eq!(decode(0x2F01), Instruction::Mov { rd: 16, rr: 17 });
+    assert_eq!(decode(0x2E01), Instruction::Mov { rd: 0, rr: 17 });
+    // MOV R0, R0 (lowest registers)
+    assert_eq!(decode(0x2C00), Instruction::Mov { rd: 0, rr: 0 });
+    // MOV R31, R31 (highest registers)
+    assert_eq!(decode(0x2FFF), Instruction::Mov { rd: 31, rr: 31 });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -1078,4 +1090,78 @@ fn test_execute_eor_keeps_i_t_h_c() {
     cpu.sreg = 0xFF;
     step_n(&mut cpu, 1);
     assert_eq!(cpu.sreg, 0xE1);
+}
+
+#[test]
+fn test_decode_mov_neighbours_are_not_mov() {
+    // OR sits right before MOV, CPI right after the logic group
+    for word in [0x2800, 0x2BFF, 0x3000] {
+        assert!(
+            !matches!(decode(word), Instruction::Mov { .. }),
+            "{word:#06X} must not decode as MOV"
+        );
+    }
+}
+
+#[test]
+fn test_execute_mov_basic() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / LDI R17, 7 / MOV R16, R17
+    cpu.load_program(&[0xE005, 0xE017, 0x2F01]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 7);
+    // the source is left untouched
+    assert_eq!(cpu.registers[17], 7);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_mov_zero_does_not_set_z() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / LDI R17, 0 / MOV R16, R17
+    cpu.load_program(&[0xE005, 0xE010, 0x2F01]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_mov_negative_does_not_set_n() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / LDI R17, 0x80 / MOV R16, R17
+    cpu.load_program(&[0xE005, 0xE810, 0x2F01]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0x80);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_mov_same_register() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / MOV R16, R16
+    cpu.load_program(&[0xE005, 0x2F00]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 5);
+}
+
+#[test]
+fn test_execute_mov_to_low_register() {
+    let mut cpu = Cpu::new();
+    // LDI R17, 7 / MOV R0, R17
+    cpu.load_program(&[0xE017, 0x2E01]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[0], 7);
+    assert_eq!(cpu.registers[17], 7);
+}
+
+#[test]
+fn test_execute_mov_does_not_touch_sreg() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / LDI R17, 7 / MOV R16, R17 with every flag on before MOV
+    cpu.load_program(&[0xE005, 0xE017, 0x2F01]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    // nothing is cleared, unlike INC and AND (0xE1)
+    assert_eq!(cpu.sreg, 0xFF);
 }

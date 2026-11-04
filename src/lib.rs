@@ -19,6 +19,7 @@ enum Instruction {
     And { rd: u8, rr: u8 },
     Or { rd: u8, rr: u8 },
     Eor { rd: u8, rr: u8 },
+    Mov { rd: u8, rr: u8 },
     Unknown(u16),
 }
 
@@ -80,6 +81,10 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFC00 == 0x2400 => {
             let (dest, src) = decode_dest_src(w);
             Instruction::Eor { rd: dest, rr: src }
+        }
+        w if w & 0xFC00 == 0x2C00 => {
+            let (dest, src) = decode_dest_src(w);
+            Instruction::Mov { rd: dest, rr: src }
         }
         _ => Instruction::Unknown(word),
     }
@@ -252,6 +257,10 @@ impl Cpu {
             Instruction::Eor { rd, rr } => {
                 self.registers[rd as usize] ^= self.registers[rr as usize];
                 self.update_flags_logic(self.registers[rd as usize]);
+                Ok(())
+            }
+            Instruction::Mov { rd, rr } => {
+                self.registers[rd as usize] = self.registers[rr as usize];
                 Ok(())
             }
         }
