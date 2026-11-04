@@ -30,6 +30,9 @@ enum Instruction {
     Cpc { rd: u8, rr: u8 },
     Com { rd: u8 },
     Neg { rd: u8 },
+    Lsr { rd: u8 },
+    Asr { rd: u8 },
+    Ror { rd: u8 },
     Unknown(u16),
 }
 
@@ -124,6 +127,9 @@ fn decode(word: u16) -> Instruction {
         }
         w if w & 0xFE0F == 0x9400 => Instruction::Com { rd: decode_dest(w) },
         w if w & 0xFE0F == 0x9401 => Instruction::Neg { rd: decode_dest(w) },
+        w if w & 0xFE0F == 0x9406 => Instruction::Lsr { rd: decode_dest(w) },
+        w if w & 0xFE0F == 0x9405 => Instruction::Asr { rd: decode_dest(w) },
+        w if w & 0xFE0F == 0x9407 => Instruction::Ror { rd: decode_dest(w) },
         _ => Instruction::Unknown(word),
     }
 }
@@ -402,6 +408,30 @@ impl Cpu {
                 self.update_flags_sub(op_a, op_b, res, carry, false);
                 Ok(())
             }
+            Instruction::Asr { rd } => {
+                let carry = self.registers[rd as usize] & 0x01 != 0;
+                let old_seven_bit = self.registers[rd as usize] & 0x80;
+                self.registers[rd as usize] = self.registers[rd as usize] >> 1;
+                self.registers[rd as usize] |= old_seven_bit;
+                self.update_flags_shift(self.registers[rd as usize], carry);
+                Ok(())
+            }
+            Instruction::Lsr { rd } => {
+                let carry = self.registers[rd as usize] & 0x01 != 0;
+                self.registers[rd as usize] = self.registers[rd as usize] >> 1;
+                self.update_flags_shift(self.registers[rd as usize], carry);
+                Ok(())
+            }
+            Instruction::Ror { rd } => {
+                let old_carry_on = self.sreg & FLAG_CARRY != 0;
+                let carry = self.registers[rd as usize] & 0x01 != 0;
+                self.registers[rd as usize] = self.registers[rd as usize] >> 1;
+                if old_carry_on {
+                    self.registers[rd as usize] |= 0x80; //turn on 7 bit
+                }
+                self.update_flags_shift(self.registers[rd as usize], carry);
+                Ok(())
+            }
         }
     }
 
@@ -533,6 +563,25 @@ impl Cpu {
         if res & 0x80 != 0 {
             self.sreg |= FLAG_NEGATIVE;
             self.sreg |= FLAG_SIGN;
+        }
+    }
+
+    fn update_flags_shift(&mut self, res: u8, carry: bool) {
+        self.sreg &= FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY | FLAG_HALF_CARRY;
+        if carry {
+            self.sreg |= FLAG_CARRY;
+            self.sreg |= FLAG_SIGN; //Sign is just Neg xor Over but Over = Neg xor Carry
+        }
+        if res == 0 {
+            self.sreg |= FLAG_ZERO;
+        }
+        if res & 0x80 != 0 {
+            self.sreg |= FLAG_NEGATIVE;
+        }
+        let negative_on = self.sreg & FLAG_NEGATIVE != 0;
+        let carry_on = self.sreg & FLAG_CARRY != 0;
+        if negative_on != carry_on {
+            self.sreg |= FLAG_OVERFLOW;
         }
     }
 

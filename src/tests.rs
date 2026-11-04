@@ -328,6 +328,24 @@ fn test_decode_com_neg() {
     assert_eq!(decode(0x95F1), Instruction::Neg { rd: 31 });
 }
 
+//ASR rd
+//LSR rd
+//ROR rd
+#[test]
+fn test_decode_shifts() {
+    // ASR / LSR / ROR on R16
+    assert_eq!(decode(0x9505), Instruction::Asr { rd: 16 });
+    assert_eq!(decode(0x9506), Instruction::Lsr { rd: 16 });
+    assert_eq!(decode(0x9507), Instruction::Ror { rd: 16 });
+    // bounds : R0 and R31
+    assert_eq!(decode(0x9405), Instruction::Asr { rd: 0 });
+    assert_eq!(decode(0x9406), Instruction::Lsr { rd: 0 });
+    assert_eq!(decode(0x9407), Instruction::Ror { rd: 0 });
+    assert_eq!(decode(0x95F5), Instruction::Asr { rd: 31 });
+    assert_eq!(decode(0x95F6), Instruction::Lsr { rd: 31 });
+    assert_eq!(decode(0x95F7), Instruction::Ror { rd: 31 });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -2031,4 +2049,209 @@ fn test_execute_com_neg_flag_preservation() {
     step_n(&mut cpu, 1);
     assert_eq!(cpu.registers[16], 0xF0);
     assert_eq!(cpu.sreg, 0xD5);
+}
+
+// Loads one register with LDI, sets sreg, then runs one unary instruction.
+fn run_unary(ldi: u16, op: u16, sreg_before: u8) -> Cpu {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[ldi, op]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = sreg_before;
+    step_n(&mut cpu, 1);
+    cpu
+}
+
+#[test]
+fn test_decode_shifts_neighbours() {
+    // COM, NEG, SWAP, INC, SEC, DEC are not shifts
+    for word in [0x9400, 0x9401, 0x9402, 0x9403, 0x9408, 0x940A] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Lsr { .. } | Instruction::Asr { .. } | Instruction::Ror { .. }
+            ),
+            "{word:#06X} must not decode as a shift"
+        );
+    }
+    // 0x9404 is not an instruction at all
+    assert!(matches!(decode(0x9404), Instruction::Unknown { .. }));
+    // the three shifts do not decode as each other
+    assert!(!matches!(
+        decode(0x9505),
+        Instruction::Lsr { .. } | Instruction::Ror { .. }
+    ));
+    assert!(!matches!(
+        decode(0x9506),
+        Instruction::Asr { .. } | Instruction::Ror { .. }
+    ));
+    assert!(!matches!(
+        decode(0x9507),
+        Instruction::Asr { .. } | Instruction::Lsr { .. }
+    ));
+}
+
+#[test]
+fn test_execute_lsr() {
+    // LSR R16 = 0x9506 ; LDI R16, x : 0xE004 (4), 0xE005 (5), 0xE001 (1), 0xE000 (0),
+    // 0xEF0F (0xFF), 0xE800 (0x80), 0xE008 (8)
+    let cpu = run_unary(0xE004, 0x9506, 0);
+    assert_eq!((cpu.registers[16], cpu.sreg), (0x02, 0), "LSR 4");
+
+    let cpu = run_unary(0xE005, 0x9506, 0);
+    assert_eq!(
+        (cpu.registers[16], cpu.sreg),
+        (0x02, FLAG_CARRY | FLAG_OVERFLOW | FLAG_SIGN),
+        "LSR 5"
+    );
+
+    let cpu = run_unary(0xE001, 0x9506, 0);
+    assert_eq!(
+        (cpu.registers[16], cpu.sreg),
+        (0x00, FLAG_CARRY | FLAG_ZERO | FLAG_OVERFLOW | FLAG_SIGN),
+        "LSR 1"
+    );
+
+    let cpu = run_unary(0xE000, 0x9506, 0);
+    assert_eq!((cpu.registers[16], cpu.sreg), (0x00, FLAG_ZERO), "LSR 0");
+
+    // N never on, even for a "negative" input : a 0 always enters bit 7
+    let cpu = run_unary(0xEF0F, 0x9506, 0);
+    assert_eq!(
+        (cpu.registers[16], cpu.sreg),
+        (0x7F, FLAG_CARRY | FLAG_OVERFLOW | FLAG_SIGN),
+        "LSR 0xFF"
+    );
+
+    let cpu = run_unary(0xE800, 0x9506, 0);
+    assert_eq!((cpu.registers[16], cpu.sreg), (0x40, 0), "LSR 0x80");
+
+    // 0x08 gives 0x04 : bit 2 of the result must not be mistaken for N
+    let cpu = run_unary(0xE008, 0x9506, 0);
+    assert_eq!((cpu.registers[16], cpu.sreg), (0x04, 0), "LSR 8");
+}
+
+#[test]
+fn test_execute_asr() {
+    // ASR R16 = 0x9505 ; LDI R16, 0x81 = 0xE801 ; LDI R16, 0xF0 = 0xEF00
+    let cpu = run_unary(0xE004, 0x9505, 0);
+    assert_eq!((cpu.registers[16], cpu.sreg), (0x02, 0), "ASR 4");
+
+    let cpu = run_unary(0xE005, 0x9505, 0);
+    assert_eq!(
+        (cpu.registers[16], cpu.sreg),
+        (0x02, FLAG_CARRY | FLAG_OVERFLOW | FLAG_SIGN),
+        "ASR 5"
+    );
+
+    let cpu = run_unary(0xE000, 0x9505, 0);
+    assert_eq!((cpu.registers[16], cpu.sreg), (0x00, FLAG_ZERO), "ASR 0");
+
+    let cpu = run_unary(0xE001, 0x9505, 0);
+    assert_eq!(
+        (cpu.registers[16], cpu.sreg),
+        (0x00, FLAG_CARRY | FLAG_ZERO | FLAG_OVERFLOW | FLAG_SIGN),
+        "ASR 1"
+    );
+
+    // -128 / 2 = -64
+    let cpu = run_unary(0xE800, 0x9505, 0);
+    assert_eq!(
+        (cpu.registers[16], cpu.sreg),
+        (0xC0, FLAG_NEGATIVE | FLAG_OVERFLOW),
+        "ASR 0x80"
+    );
+
+    let cpu = run_unary(0xE801, 0x9505, 0);
+    assert_eq!(
+        (cpu.registers[16], cpu.sreg),
+        (0xC0, FLAG_CARRY | FLAG_NEGATIVE | FLAG_SIGN),
+        "ASR 0x81"
+    );
+
+    // -1 stays -1 : an ASR written as an LSR would give 0x7F
+    let cpu = run_unary(0xEF0F, 0x9505, 0);
+    assert_eq!(
+        (cpu.registers[16], cpu.sreg),
+        (0xFF, FLAG_CARRY | FLAG_NEGATIVE | FLAG_SIGN),
+        "ASR 0xFF"
+    );
+
+    let cpu = run_unary(0xEF00, 0x9505, 0);
+    assert_eq!(
+        (cpu.registers[16], cpu.sreg),
+        (0xF8, FLAG_NEGATIVE | FLAG_OVERFLOW),
+        "ASR 0xF0"
+    );
+}
+
+#[test]
+fn test_execute_ror() {
+    // ROR R16 = 0x9507 ; LDI R16, 2 = 0xE002
+    let cpu = run_unary(0xE002, 0x9507, 0);
+    assert_eq!((cpu.registers[16], cpu.sreg), (0x01, 0), "ROR 2, C off");
+
+    // the old carry enters bit 7
+    let cpu = run_unary(0xE002, 0x9507, FLAG_CARRY);
+    assert_eq!(
+        (cpu.registers[16], cpu.sreg),
+        (0x81, FLAG_NEGATIVE | FLAG_OVERFLOW),
+        "ROR 2, C on"
+    );
+
+    let cpu = run_unary(0xE001, 0x9507, 0);
+    assert_eq!(
+        (cpu.registers[16], cpu.sreg),
+        (0x00, FLAG_CARRY | FLAG_ZERO | FLAG_OVERFLOW | FLAG_SIGN),
+        "ROR 1, C off"
+    );
+
+    let cpu = run_unary(0xE001, 0x9507, FLAG_CARRY);
+    assert_eq!(
+        (cpu.registers[16], cpu.sreg),
+        (0x80, FLAG_CARRY | FLAG_NEGATIVE | FLAG_SIGN),
+        "ROR 1, C on"
+    );
+
+    let cpu = run_unary(0xE000, 0x9507, FLAG_CARRY);
+    assert_eq!(
+        (cpu.registers[16], cpu.sreg),
+        (0x80, FLAG_NEGATIVE | FLAG_OVERFLOW),
+        "ROR 0, C on"
+    );
+
+    let cpu = run_unary(0xE000, 0x9507, 0);
+    assert_eq!(
+        (cpu.registers[16], cpu.sreg),
+        (0x00, FLAG_ZERO),
+        "ROR 0, C off"
+    );
+}
+
+#[test]
+fn test_execute_lsr_ror_chain_16_bits() {
+    let mut cpu = Cpu::new();
+    // R17:R16 = 0x0102 ; LSR R17 / ROR R16 : 0x0102 >> 1 = 0x0081
+    // the low bit of the high byte goes through C into bit 7 of the low byte
+    cpu.load_program(&[0xE002, 0xE011, 0x9516, 0x9507]);
+    step_n(&mut cpu, 4);
+    assert_eq!(cpu.registers[17], 0x00);
+    assert_eq!(cpu.registers[16], 0x81);
+    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_OVERFLOW);
+}
+
+#[test]
+fn test_execute_shifts_flag_preservation() {
+    // R16 = 0x04, every flag on before : I, T, H kept ; C, Z, N, V, S recomputed
+    // LSR : result 0x02, C off, nothing else on
+    let cpu = run_unary(0xE004, 0x9506, 0xFF);
+    assert_eq!(cpu.sreg, 0xE0);
+
+    // ASR : same
+    let cpu = run_unary(0xE004, 0x9505, 0xFF);
+    assert_eq!(cpu.sreg, 0xE0);
+
+    // ROR : C was on, so the result is 0x82 : N and V on, C off, S off
+    let cpu = run_unary(0xE004, 0x9507, 0xFF);
+    assert_eq!(cpu.registers[16], 0x82);
+    assert_eq!(cpu.sreg, 0xEC);
 }
