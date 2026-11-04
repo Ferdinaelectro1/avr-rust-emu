@@ -14,6 +14,8 @@ enum Instruction {
     Rjmp { k: i16 },
     BRBS { s: u8, k: i8 },
     BRBC { s: u8, k: i8 },
+    Inc { rd: u8 },
+    Dec { rd: u8 },
     Unknown(u16),
 }
 
@@ -57,6 +59,12 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFC00 == 0xF400 => Instruction::BRBC {
             s: (w & 0x0007) as u8,
             k: sign_extend(w >> 3, 7) as i8,
+        },
+        w if w & 0xFE0F == 0x9403 => Instruction::Inc {
+            rd: ((w >> 4) & 0x001F) as u8,
+        },
+        w if w & 0xFE0F == 0x940A => Instruction::Dec {
+            rd: ((w >> 4) & 0x001F) as u8,
         },
         _ => Instruction::Unknown(word),
     }
@@ -206,6 +214,16 @@ impl Cpu {
                 }
                 Ok(())
             }
+            Instruction::Inc { rd } => {
+                self.registers[rd as usize] = self.registers[rd as usize].wrapping_add(1);
+                self.update_flags_incdec(self.registers[rd as usize], true);
+                Ok(())
+            }
+            Instruction::Dec { rd } => {
+                self.registers[rd as usize] = self.registers[rd as usize].wrapping_sub(1);
+                self.update_flags_incdec(self.registers[rd as usize], false);
+                Ok(())
+            }
         }
     }
 
@@ -308,6 +326,23 @@ impl Cpu {
         let negative_on = (self.sreg & FLAG_NEGATIVE) != 0;
         let overflow_on = (self.sreg & FLAG_OVERFLOW) != 0;
         if negative_on != overflow_on {
+            self.sreg |= FLAG_SIGN;
+        }
+    }
+
+    fn update_flags_incdec(&mut self, res: u8, is_inc: bool) {
+        self.sreg &= FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY | FLAG_CARRY | FLAG_HALF_CARRY;
+        if res == 0 {
+            self.sreg |= FLAG_ZERO;
+        }
+        let overflow_value = if is_inc { 0x80 } else { 0x7F };
+        if res == overflow_value {
+            self.sreg |= FLAG_OVERFLOW;
+        }
+        if res & 0x80 != 0 {
+            self.sreg |= FLAG_NEGATIVE;
+        }
+        if ((self.sreg & FLAG_NEGATIVE) != 0) != ((self.sreg & FLAG_OVERFLOW) != 0) {
             self.sreg |= FLAG_SIGN;
         }
     }

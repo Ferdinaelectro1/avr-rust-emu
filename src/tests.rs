@@ -207,6 +207,20 @@ fn test_decode_branches() {
     assert_eq!(decode(0xF1F8), Instruction::BRBS { s: 0, k: 63 });
 }
 
+//INC Rd
+//DEC Rd
+#[test]
+fn test_decode_inc_dec() {
+    // INC R16 / INC R0 / INC R31
+    assert_eq!(decode(0x9503), Instruction::Inc { rd: 16 });
+    assert_eq!(decode(0x9403), Instruction::Inc { rd: 0 });
+    assert_eq!(decode(0x95F3), Instruction::Inc { rd: 31 });
+    // DEC R16 / DEC R0 / DEC R31
+    assert_eq!(decode(0x950A), Instruction::Dec { rd: 16 });
+    assert_eq!(decode(0x940A), Instruction::Dec { rd: 0 });
+    assert_eq!(decode(0x95FA), Instruction::Dec { rd: 31 });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -781,4 +795,133 @@ fn test_execute_branch_wraps_below_zero() {
     cpu.load_program(&[0xF3F0]);
     step_n(&mut cpu, 1);
     assert_eq!(cpu.pc as usize, FLASH_SIZE - 1);
+}
+
+#[test]
+fn test_decode_inc_dec_neighbours_are_not_inc_dec() {
+    // COM, NEG, SWAP, ASR, LSR, ROR share the 1001 010d dddd xxxx group
+    for word in [0x9400, 0x9401, 0x9402, 0x9405, 0x9406, 0x9407] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Inc { .. } | Instruction::Dec { .. }
+            ),
+            "{word:#06X} must not decode as INC or DEC"
+        );
+    }
+}
+
+#[test]
+fn test_execute_inc_basic() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / INC R16
+    cpu.load_program(&[0xE005, 0x9503]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 6);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_inc_wraps_to_zero() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 255 / INC R16 : Z on, C untouched
+    cpu.load_program(&[0xEF0F, 0x9503]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_inc_overflow() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 127 / INC R16 : 127 -> 128, N and V (S = N xor V = 0)
+    cpu.load_program(&[0xE70F, 0x9503]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 128);
+    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_OVERFLOW);
+}
+
+#[test]
+fn test_execute_inc_negative() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 128 / INC R16 : 128 -> 129, N and S
+    cpu.load_program(&[0xE800, 0x9503]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 129);
+    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_dec_basic() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / DEC R16
+    cpu.load_program(&[0xE005, 0x950A]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 4);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_dec_to_zero() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 1 / DEC R16
+    cpu.load_program(&[0xE001, 0x950A]);
+    step_n(&mut cpu, 1);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_dec_wraps_below_zero() {
+    let mut cpu = Cpu::new();
+    // DEC R16 with R16 = 0 : 0 -> 255, N and S, C untouched
+    cpu.load_program(&[0x950A]);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 255);
+    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_dec_overflow() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 128 / DEC R16 : 128 -> 127, V and S
+    cpu.load_program(&[0xE800, 0x950A]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 127);
+    assert_eq!(cpu.sreg, FLAG_OVERFLOW | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_inc_keeps_i_t_h_c() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / INC R16 with every flag on before INC
+    cpu.load_program(&[0xE005, 0x9503]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    // I, T, H, C kept ; Z, N, V, S cleared
+    assert_eq!(cpu.sreg, 0xE1);
+}
+
+#[test]
+fn test_execute_dec_keeps_i_t_h_c() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / DEC R16 with every flag on before DEC
+    cpu.load_program(&[0xE005, 0x950A]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xE1);
+}
+
+#[test]
+fn test_execute_dec_brne_countdown_loop() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 3 / DEC R16 / BRNE -2
+    cpu.load_program(&[0xE003, 0x950A, 0xF7F1]);
+    step_n(&mut cpu, 7);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+    assert_eq!(cpu.pc, 3);
 }
