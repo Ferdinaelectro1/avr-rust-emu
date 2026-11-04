@@ -47,22 +47,17 @@ fn decode(word: u16) -> Instruction {
                 src: src,
             }
         }
-        w if w & 0xF000 == 0xC000 => {
-            let raw = (w & 0x0FFF) as i16;
-            // 12-bit two's complement: bit 11 is the sign
-            let k = if raw & 0x0800 != 0 { raw - 0x1000 } else { raw };
-            Instruction::Rjmp { k: k }
+        w if w & 0xF000 == 0xC000 => Instruction::Rjmp {
+            k: sign_extend(w, 12),
         },
-        w if w & 0xFC00 == 0xF000 => {
-            let raw = ((w >> 3) & 0x007F) as i8;
-            let k = if raw & 0x0040 != 0 { (raw as i16 - 0x0080) as i8 } else { raw };
-            Instruction::BRBS { s: (w & 0x0007) as u8, k: k }
-        }
-        w if w & 0xFC00 == 0xF400 => {
-            let raw = ((w >> 3) & 0x007F) as i8;
-            let k = if raw & 0x0040 != 0 { (raw as i16 - 0x0080) as i8 } else { raw };
-            Instruction::BRBC { s: (w & 0x0007) as u8, k: k }
-        }
+        w if w & 0xFC00 == 0xF000 => Instruction::BRBS {
+            s: (w & 0x0007) as u8,
+            k: sign_extend(w >> 3, 7) as i8,
+        },
+        w if w & 0xFC00 == 0xF400 => Instruction::BRBC {
+            s: (w & 0x0007) as u8,
+            k: sign_extend(w >> 3, 7) as i8,
+        },
         _ => Instruction::Unknown(word),
     }
 }
@@ -81,6 +76,16 @@ fn decode_dest_src(word: u16) -> (u8, u8) {
         (((word >> 4) & 0x001F) as u8),
         (((word >> 5) & 0x0010) | (word & 0x000F)) as u8,
     )
+}
+
+fn sign_extend(value: u16, bits: u32) -> i16 {
+    let raw = (value & ((1 << bits) - 1)) as i16;
+    let k = if raw & (1 << (bits - 1)) != 0 {
+        raw - (1 << bits)
+    } else {
+        raw
+    };
+    return k;
 }
 
 pub struct Cpu {
