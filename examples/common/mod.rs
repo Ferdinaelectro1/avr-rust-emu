@@ -13,3 +13,24 @@ pub fn run_program(cpu: &mut Cpu, program: &[u16]) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Run until `pc` leaves the program, printing one trace line per step.
+/// Returns the number of steps executed.
+pub fn run_until_end(cpu: &mut Cpu, program: &[u16], max_steps: usize) -> Result<usize, String> {
+    cpu.load_program(program);
+    let mut steps = 0;
+    while (cpu.pc() as usize) < program.len() {
+        if steps == max_steps {
+            return Err(format!("stopped after {max_steps} steps (infinite loop?)"));
+        }
+        println!(
+            "step {:>2}: pc={:#06X}  word={:#06X}",
+            steps + 1,
+            cpu.pc(),
+            program[cpu.pc() as usize]
+        );
+        cpu.step()?;
+        steps += 1;
+    }
+    Ok(steps)
+}

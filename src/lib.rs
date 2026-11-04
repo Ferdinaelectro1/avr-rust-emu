@@ -12,6 +12,8 @@ enum Instruction {
     Sub { dest: u8, src: u8 },
     Cp { dest: u8, src: u8 },
     Rjmp { k: i16 },
+    BRBS { s: u8, k: i8 },
+    BRBC { s: u8, k: i8 },
     Unknown(u16),
 }
 
@@ -50,6 +52,16 @@ fn decode(word: u16) -> Instruction {
             // 12-bit two's complement: bit 11 is the sign
             let k = if raw & 0x0800 != 0 { raw - 0x1000 } else { raw };
             Instruction::Rjmp { k: k }
+        },
+        w if w & 0xFC00 == 0xF000 => {
+            let raw = ((w >> 3) & 0x007F) as i8;
+            let k = if raw & 0x0040 != 0 { (raw as i16 - 0x0080) as i8 } else { raw };
+            Instruction::BRBS { s: (w & 0x0007) as u8, k: k }
+        }
+        w if w & 0xFC00 == 0xF400 => {
+            let raw = ((w >> 3) & 0x007F) as i8;
+            let k = if raw & 0x0040 != 0 { (raw as i16 - 0x0080) as i8 } else { raw };
+            Instruction::BRBC { s: (w & 0x0007) as u8, k: k }
         }
         _ => Instruction::Unknown(word),
     }
@@ -177,6 +189,18 @@ impl Cpu {
                 self.pc = (self.pc as i32 + k as i32).rem_euclid(FLASH_SIZE as i32) as u16;
                 Ok(())
             }
+            Instruction::BRBS { s, k } => {
+                if (1 << s) & self.sreg != 0 {
+                    self.pc = (self.pc as i16 + k as i16).rem_euclid(FLASH_SIZE as i16) as u16;
+                }
+                Ok(())
+            }
+            Instruction::BRBC { s, k } => {
+                if (1 << s) & self.sreg == 0 {
+                    self.pc = (self.pc as i16 + k as i16).rem_euclid(FLASH_SIZE as i16) as u16;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -281,6 +305,10 @@ impl Cpu {
         if negative_on != overflow_on {
             self.sreg |= FLAG_SIGN;
         }
+    }
+
+    pub fn pc(&self) -> u16 {
+        self.pc
     }
 }
 

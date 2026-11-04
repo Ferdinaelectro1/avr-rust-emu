@@ -191,6 +191,22 @@ fn test_decode_rjmp() {
     assert_eq!(decode(0xC800), Instruction::Rjmp { k: -2048 });
 }
 
+//BRBS s, k
+//BRBS s, k
+#[test]
+fn test_decode_branches() {
+    // BREQ +1
+    assert_eq!(decode(0xF009), Instruction::BRBS { s: 1, k: 1 });
+    // BRNE -2
+    assert_eq!(decode(0xF7F1), Instruction::BRBC { s: 1, k: -2 });
+    // BRIE -1
+    assert_eq!(decode(0xF3FF), Instruction::BRBS { s: 7, k: -1 });
+    // BRCS -64 (lowest offset)
+    assert_eq!(decode(0xF200), Instruction::BRBS { s: 0, k: -64 });
+    // BRCS +63 (highest offset)
+    assert_eq!(decode(0xF1F8), Instruction::BRBS { s: 0, k: 63 });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -690,4 +706,79 @@ fn test_execute_rjmp_does_not_touch_sreg() {
     cpu.load_program(&[0xC001]);
     assert_eq!(cpu.step(), Ok(()));
     assert_eq!(cpu.sreg, 0xFF);
+}
+
+fn step_n(cpu: &mut Cpu, steps: usize) {
+    for _ in 0..steps {
+        assert_eq!(cpu.step(), Ok(()));
+    }
+}
+
+#[test]
+fn test_decode_branch_neighbours_are_not_branches() {
+    // SBRC and BLD sit right after the branch group
+    assert!(!matches!(
+        decode(0xFC00),
+        Instruction::BRBS { .. } | Instruction::BRBC { .. }
+    ));
+    assert!(!matches!(
+        decode(0xF800),
+        Instruction::BRBS { .. } | Instruction::BRBC { .. }
+    ));
+}
+
+#[test]
+fn test_execute_breq_taken() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 5 / LDI R17, 5 / CP R16, R17 / BREQ +1
+    // LDI R18, 1 (skipped) / LDI R19, 2
+    cpu.load_program(&[0xE005, 0xE015, 0x1701, 0xF009, 0xE021, 0xE032]);
+    step_n(&mut cpu, 5);
+    assert_eq!(cpu.registers[18], 0);
+    assert_eq!(cpu.registers[19], 2);
+    assert_eq!(cpu.pc, 6);
+}
+
+#[test]
+fn test_execute_breq_not_taken() {
+    let mut cpu = Cpu::new();
+    // Same program with R17 = 6, so Z stays off
+    cpu.load_program(&[0xE005, 0xE016, 0x1701, 0xF009, 0xE021, 0xE032]);
+    step_n(&mut cpu, 6);
+    assert_eq!(cpu.registers[18], 1);
+    assert_eq!(cpu.registers[19], 2);
+    assert_eq!(cpu.pc, 6);
+}
+
+#[test]
+fn test_execute_brne_countdown_loop() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 3 / LDI R17, 1 / SUB R16, R17 / BRNE -2
+    cpu.load_program(&[0xE003, 0xE011, 0x1B01, 0xF7F1]);
+    step_n(&mut cpu, 8);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.registers[17], 1);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+    assert_eq!(cpu.pc, 4);
+}
+
+#[test]
+fn test_execute_branch_does_not_touch_sreg() {
+    let mut cpu = Cpu::new();
+    cpu.sreg = 0xFF;
+    // BREQ +1, taken because Z is on
+    cpu.load_program(&[0xF009]);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xFF);
+    assert_eq!(cpu.pc, 2);
+}
+
+#[test]
+fn test_execute_branch_wraps_below_zero() {
+    let mut cpu = Cpu::new();
+    cpu.sreg = FLAG_CARRY;
+    // BRCS -2 at address 0, taken because C is on
+    cpu.load_program(&[0xF3F0]);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.pc as usize, FLASH_SIZE - 1);
 }
