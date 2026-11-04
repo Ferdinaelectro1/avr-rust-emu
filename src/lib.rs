@@ -24,6 +24,8 @@ enum Instruction {
     Sbc { rd: u8, rr: u8 },
     Subi { rd: u8, k: u8 },
     Cpi { rd: u8, k: u8 },
+    Andi { rd: u8, k: u8 },
+    Ori { rd: u8, k: u8 },
     Unknown(u16),
 }
 
@@ -103,6 +105,14 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xF000 == 0x3000 => {
             let (reg, imm) = decode_reg_imm(w);
             Instruction::Cpi { rd: reg, k: imm }
+        }
+        w if w & 0xF000 == 0x7000 => {
+            let (reg, imm) = decode_reg_imm(w);
+            Instruction::Andi { rd: reg, k: imm }
+        }
+        w if w & 0xF000 == 0x6000 => {
+            let (reg, imm) = decode_reg_imm(w);
+            Instruction::Ori { rd: reg, k: imm }
         }
         _ => Instruction::Unknown(word),
     }
@@ -325,6 +335,16 @@ impl Cpu {
                 let op_b = k;
                 let (res, carry) = overflowing_sub(op_a, op_b);
                 self.update_flags_sub(op_a, op_b, res, carry, false);
+                Ok(())
+            }
+            Instruction::Andi { rd, k } => {
+                self.registers[rd as usize] &= k;
+                self.update_flags_logic(self.registers[rd as usize]);
+                Ok(())
+            }
+            Instruction::Ori { rd, k } => {
+                self.registers[rd as usize] |= k;
+                self.update_flags_logic(self.registers[rd as usize]);
                 Ok(())
             }
         }

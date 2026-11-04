@@ -280,6 +280,22 @@ fn test_decode_subi_cpi() {
     assert_eq!(decode(0x3A3C), Instruction::Cpi { rd: 19, k: 0xAC });
 }
 
+//ANDI Rd, K
+//ORI  Rd, K
+#[test]
+fn test_decode_andi_ori() {
+    // ANDI R16, 0x0F / ANDI R16, 0 / ANDI R31, 0xFF
+    assert_eq!(decode(0x700F), Instruction::Andi { rd: 16, k: 0x0F });
+    assert_eq!(decode(0x7000), Instruction::Andi { rd: 16, k: 0 });
+    assert_eq!(decode(0x7FFF), Instruction::Andi { rd: 31, k: 0xFF });
+    // a constant with different high and low nibbles : ANDI R19, 0xAC
+    assert_eq!(decode(0x7A3C), Instruction::Andi { rd: 19, k: 0xAC });
+    // ORI R16, 0x0F / ORI R31, 0xFF / ORI R19, 0xAC
+    assert_eq!(decode(0x600F), Instruction::Ori { rd: 16, k: 0x0F });
+    assert_eq!(decode(0x6FFF), Instruction::Ori { rd: 31, k: 0xFF });
+    assert_eq!(decode(0x6A3C), Instruction::Ori { rd: 19, k: 0xAC });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -1508,4 +1524,131 @@ fn test_execute_subi_cpi_keep_i_t_only() {
     cpu.sreg = 0xFF;
     step_n(&mut cpu, 1);
     assert_eq!(cpu.sreg, FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY);
+}
+
+#[test]
+fn test_decode_andi_ori_neighbours() {
+    // SUBI, SBCI, CPI and the 0x8000 group are not ANDI or ORI
+    for word in [0x5000, 0x4000, 0x3000, 0x8000] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Andi { .. } | Instruction::Ori { .. }
+            ),
+            "{word:#06X} must not decode as ANDI or ORI"
+        );
+    }
+    // ANDI and ORI do not decode as each other
+    assert!(!matches!(decode(0x7000), Instruction::Ori { .. }));
+    assert!(!matches!(decode(0x6000), Instruction::Andi { .. }));
+}
+
+#[test]
+fn test_execute_andi_basic() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xFF / ANDI R16, 0x0F
+    cpu.load_program(&[0xEF0F, 0x700F]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0x0F);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_andi_zero() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xF0 / ANDI R16, 0x0F
+    cpu.load_program(&[0xEF00, 0x700F]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0x00);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_andi_negative() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xFF / ANDI R16, 0x80 : N and S (V stays off)
+    cpu.load_program(&[0xEF0F, 0x7800]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0x80);
+    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_andi_clears_one_bit() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xFF / ANDI R16, 0xDF (the compiler's way of clearing bit 5)
+    cpu.load_program(&[0xEF0F, 0x7D0F]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0xDF);
+    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_andi_high_register() {
+    let mut cpu = Cpu::new();
+    // LDI R31, 0xFF / ANDI R31, 0x0F
+    cpu.load_program(&[0xEFFF, 0x70FF]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[31], 0x0F);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_ori_basic() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0x0A / ORI R16, 0x05
+    cpu.load_program(&[0xE00A, 0x6005]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0x0F);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_ori_zero() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0 / ORI R16, 0
+    cpu.load_program(&[0xE000, 0x6000]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0x00);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_ori_negative() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0xF0 / ORI R16, 0x0F
+    cpu.load_program(&[0xEF00, 0x600F]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0xFF);
+    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_ori_sets_one_bit() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0 / ORI R16, 0x20 (the compiler's way of setting bit 5)
+    cpu.load_program(&[0xE000, 0x6200]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0x20);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_andi_ori_keep_i_t_h_c() {
+    // ANDI R16, 0x0F on 0xFF : result 0x0F, every flag on before
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xEF0F, 0x700F]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    // I, T, H, C kept ; Z, N, V, S cleared
+    assert_eq!(cpu.sreg, 0xE1);
+
+    // ORI R16, 0x05 on 0x0A : result 0x0F, same check
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE00A, 0x6005]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xE1);
 }
