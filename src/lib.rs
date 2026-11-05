@@ -37,6 +37,9 @@ enum Instruction {
     Adiw { rd: u8, k: u8 },
     Sbiw { rd: u8, k: u8 },
     Movw { rd: u8, rr: u8 },
+    Mul { rd: u8, rr: u8 },
+    Muls { rd: u8, rr: u8 },
+    Mulsu { rd: u8, rr: u8 },
     Unknown(u16),
 }
 
@@ -146,6 +149,18 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFF00 == 0x0100 => Instruction::Movw {
             rd: 2 * ((w >> 4) & 0x000F) as u8,
             rr: 2 * (w & 0x000F) as u8,
+        },
+        w if w & 0xFC00 == 0x9C00 => {
+            let (dest, src) = decode_dest_src(w);
+            Instruction::Mul { rd: dest, rr: src }
+        }
+        w if w & 0xFF00 == 0x0200 => Instruction::Muls {
+            rd: (((w >> 4) & 0x000F) + 16) as u8,
+            rr: ((w & 0x000F) + 16) as u8,
+        },
+        w if w & 0xFF88 == 0x0300 => Instruction::Mulsu {
+            rd: (((w >> 4) & 0x0007) + 16) as u8,
+            rr: ((w & 0x0007) + 16) as u8,
         },
         _ => Instruction::Unknown(word),
     }
@@ -479,6 +494,29 @@ impl Cpu {
                 self.registers[(rd + 1) as usize] = self.registers[(rr + 1) as usize];
                 Ok(())
             }
+            Instruction::Mul { rd, rr } => {
+                let res = self.registers[rd as usize] as u16 * self.registers[rr as usize] as u16;
+                self.registers[0] = (res & 0x00FF) as u8;
+                self.registers[1] = ((res >> 8) & 0x00FF) as u8;
+                self.update_flags_mul(res);
+                Ok(())
+            }
+            Instruction::Muls { rd, rr } => {
+                let res = (self.registers[rd as usize] as i8) as i16
+                    * (self.registers[rr as usize] as i8) as i16;
+                self.registers[0] = (res & 0x00FF) as u8;
+                self.registers[1] = ((res >> 8) & 0x00FF) as u8;
+                self.update_flags_mul(res as u16);
+                Ok(())
+            }
+            Instruction::Mulsu { rd, rr } => {
+                let signed_res =
+                    self.registers[rd as usize] as i8 as i16 * self.registers[rr as usize] as i16;
+                self.registers[0] = (signed_res & 0x00FF) as u8;
+                self.registers[1] = ((signed_res >> 8) & 0x00FF) as u8;
+                self.update_flags_mul(signed_res as u16);
+                Ok(())
+            }
         }
     }
 
@@ -657,6 +695,16 @@ impl Cpu {
         }
         if ((self.sreg & FLAG_NEGATIVE) != 0) != ((self.sreg & FLAG_OVERFLOW) != 0) {
             self.sreg |= FLAG_SIGN;
+        }
+    }
+
+    fn update_flags_mul(&mut self, res: u16) {
+        self.sreg &= !(FLAG_CARRY | FLAG_ZERO); //Clear C and Z flags
+        if res == 0 {
+            self.sreg |= FLAG_ZERO;
+        }
+        if res & 0x8000 != 0 {
+            self.sreg |= FLAG_CARRY;
         }
     }
 

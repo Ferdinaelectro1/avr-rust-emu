@@ -391,6 +391,25 @@ fn test_decode_movw() {
     assert_eq!(decode(0x01EF), Instruction::Movw { rd: 28, rr: 30 });
 }
 
+//MUL Rd, Rr
+//MULS Rd, Rr
+//MULSU Rd, Rr
+#[test]
+fn test_decode_mul_muls_mulsu() {
+    // MUL R16, R17 / MUL R0, R0 / MUL R31, R31
+    assert_eq!(decode(0x9F01), Instruction::Mul { rd: 16, rr: 17 });
+    assert_eq!(decode(0x9C00), Instruction::Mul { rd: 0, rr: 0 });
+    assert_eq!(decode(0x9FFF), Instruction::Mul { rd: 31, rr: 31 });
+    // MULS R16, R17 / MULS R16, R16 / MULS R31, R31
+    assert_eq!(decode(0x0201), Instruction::Muls { rd: 16, rr: 17 });
+    assert_eq!(decode(0x0200), Instruction::Muls { rd: 16, rr: 16 });
+    assert_eq!(decode(0x02FF), Instruction::Muls { rd: 31, rr: 31 });
+    // MULSU R16, R17 / MULSU R16, R16 / MULSU R23, R23
+    assert_eq!(decode(0x0301), Instruction::Mulsu { rd: 16, rr: 17 });
+    assert_eq!(decode(0x0300), Instruction::Mulsu { rd: 16, rr: 16 });
+    assert_eq!(decode(0x0377), Instruction::Mulsu { rd: 23, rr: 23 });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -2686,5 +2705,216 @@ fn test_execute_movw_keeps_all_flags() {
         step_n(&mut cpu, 1);
         assert_eq!(reg_pair(&cpu, 24), 0x1234);
         assert_eq!(cpu.sreg, sreg);
+    }
+}
+
+#[test]
+fn test_decode_mul_neighbours() {
+    // the group below (CBI, SBIC, SBI, SBIS) and the one above are not MUL
+    for word in [0x9800, 0x9BFF, 0xA000] {
+        assert!(
+            !matches!(decode(word), Instruction::Mul { .. }),
+            "{word:#06X} must not decode as MUL"
+        );
+    }
+    // 0x9400 to 0x97FF (COM..., ADIW, SBIW) are not MUL either
+    for word in [0x9400, 0x95F3, 0x9600, 0x97FF] {
+        assert!(!matches!(decode(word), Instruction::Mul { .. }));
+    }
+}
+
+#[test]
+fn test_decode_muls_mulsu_neighbours() {
+    // MOVW, CPC and SBC are not MULS or MULSU
+    for word in [0x0100, 0x01FF, 0x0400, 0x0800] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Muls { .. } | Instruction::Mulsu { .. }
+            ),
+            "{word:#06X} must not decode as MULS or MULSU"
+        );
+    }
+    // MULS and MULSU do not decode as each other
+    assert!(!matches!(decode(0x0300), Instruction::Muls { .. }));
+    assert!(!matches!(decode(0x0200), Instruction::Mulsu { .. }));
+    assert!(!matches!(decode(0x0201), Instruction::Mulsu { .. }));
+    assert!(!matches!(decode(0x0301), Instruction::Muls { .. }));
+}
+
+#[test]
+fn test_decode_fmul_holes_stay_unknown() {
+    // the FMUL family shares 0x03xx with MULSU : bits 7 and 3 must be 0
+    for word in [0x0308, 0x0380, 0x0388, 0x0390, 0x03FF] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Mul { .. } | Instruction::Muls { .. } | Instruction::Mulsu { .. }
+            ),
+            "{word:#06X} must not decode as MUL, MULS or MULSU"
+        );
+    }
+}
+
+#[test]
+fn test_execute_mul_values() {
+    // (program, expected R1:R0, expected SREG, label)
+    let cases: [([u16; 3], u16, u8, &str); 6] = [
+        ([0xE005, 0xE017, 0x9F01], 0x0023, 0, "MUL 5 x 7"),
+        ([0xEC08, 0xE614, 0x9F01], 0x4E20, 0, "MUL 200 x 100"),
+        ([0xE800, 0xE012, 0x9F01], 0x0100, 0, "MUL 128 x 2"),
+        (
+            [0xEF0F, 0xEF1F, 0x9F01],
+            0xFE01,
+            FLAG_CARRY,
+            "MUL 255 x 255",
+        ),
+        (
+            [0xEC08, 0xEC18, 0x9F01],
+            0x9C40,
+            FLAG_CARRY,
+            "MUL 200 x 200",
+        ),
+        ([0xE000, 0xE017, 0x9F01], 0x0000, FLAG_ZERO, "MUL 0 x 7"),
+    ];
+    for (program, expected, flags, label) in cases {
+        let cpu = run_words(&program);
+        assert_eq!(reg_pair(&cpu, 0), expected, "{label}");
+        assert_eq!(cpu.sreg, flags, "{label} flags");
+    }
+}
+
+#[test]
+fn test_execute_mul_keeps_operands() {
+    // MUL R16, R17 : the result goes to R1:R0, R16 and R17 are untouched
+    let cpu = run_words(&[0xEF0F, 0xEF1F, 0x9F01]);
+    assert_eq!(cpu.registers[16], 0xFF);
+    assert_eq!(cpu.registers[17], 0xFF);
+    assert_eq!(cpu.registers[0], 0x01);
+    assert_eq!(cpu.registers[1], 0xFE);
+}
+
+#[test]
+fn test_execute_mul_reads_before_writing() {
+    // MUL R0, R1 with R0 = 3 and R1 = 4 : the operands are the registers
+    // that receive the result, so they must be read first
+    let mut cpu = Cpu::new();
+    cpu.registers[0] = 3;
+    cpu.registers[1] = 4;
+    cpu.load_program(&[0x9C01]);
+    step_n(&mut cpu, 1);
+    assert_eq!(reg_pair(&cpu, 0), 0x000C);
+
+    // MUL R0, R0 with R0 = 16 : 256 = 0x0100
+    let mut cpu = Cpu::new();
+    cpu.registers[0] = 16;
+    cpu.load_program(&[0x9C00]);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[0], 0x00);
+    assert_eq!(cpu.registers[1], 0x01);
+}
+
+#[test]
+fn test_execute_mul_then_clr_r1() {
+    // avr-gcc follows every MUL with EOR R1, R1 (clr r1) to restore R1 = 0
+    let cpu = run_words(&[0xEF0F, 0xEF1F, 0x9F01, 0x2411]);
+    assert_eq!(cpu.registers[1], 0x00);
+    assert_eq!(cpu.registers[0], 0x01);
+}
+
+#[test]
+fn test_execute_muls_values() {
+    let cases: [([u16; 3], u16, u8, &str); 6] = [
+        ([0xEF0F, 0xEF1F, 0x0201], 0x0001, 0, "MULS -1 x -1"),
+        ([0xEF0F, 0xE015, 0x0201], 0xFFFB, FLAG_CARRY, "MULS -1 x 5"),
+        ([0xE800, 0xE810, 0x0201], 0x4000, 0, "MULS -128 x -128"),
+        ([0xE70F, 0xE71F, 0x0201], 0x3F01, 0, "MULS 127 x 127"),
+        (
+            [0xE800, 0xE71F, 0x0201],
+            0xC080,
+            FLAG_CARRY,
+            "MULS -128 x 127",
+        ),
+        ([0xE000, 0xEF1F, 0x0201], 0x0000, FLAG_ZERO, "MULS 0 x -1"),
+    ];
+    for (program, expected, flags, label) in cases {
+        let cpu = run_words(&program);
+        assert_eq!(reg_pair(&cpu, 0), expected, "{label}");
+        assert_eq!(cpu.sreg, flags, "{label} flags");
+    }
+}
+
+#[test]
+fn test_execute_mulsu_values() {
+    let cases: [([u16; 3], u16, u8, &str); 6] = [
+        (
+            [0xEF0F, 0xEF1F, 0x0301],
+            0xFF01,
+            FLAG_CARRY,
+            "MULSU -1 x 255",
+        ),
+        (
+            [0xE800, 0xEF1F, 0x0301],
+            0x8080,
+            FLAG_CARRY,
+            "MULSU -128 x 255",
+        ),
+        ([0xE70F, 0xEF1F, 0x0301], 0x7E81, 0, "MULSU 127 x 255"),
+        ([0xE005, 0xE017, 0x0301], 0x0023, 0, "MULSU 5 x 7"),
+        ([0xEF0F, 0xE015, 0x0301], 0xFFFB, FLAG_CARRY, "MULSU -1 x 5"),
+        ([0xE000, 0xEF1F, 0x0301], 0x0000, FLAG_ZERO, "MULSU 0 x 255"),
+    ];
+    for (program, expected, flags, label) in cases {
+        let cpu = run_words(&program);
+        assert_eq!(reg_pair(&cpu, 0), expected, "{label}");
+        assert_eq!(cpu.sreg, flags, "{label} flags");
+    }
+}
+
+#[test]
+fn test_execute_mul_variants_discriminate() {
+    // same operands 0xFF and 0xFF, three different results
+    let mul = run_words(&[0xEF0F, 0xEF1F, 0x9F01]);
+    let muls = run_words(&[0xEF0F, 0xEF1F, 0x0201]);
+    let mulsu = run_words(&[0xEF0F, 0xEF1F, 0x0301]);
+    assert_eq!(reg_pair(&mul, 0), 0xFE01);
+    assert_eq!(reg_pair(&muls, 0), 0x0001);
+    assert_eq!(reg_pair(&mulsu, 0), 0xFF01);
+}
+
+#[test]
+fn test_execute_mul_keeps_other_flags() {
+    // MUL 5 x 7 with every flag on before : only C and Z are recomputed
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE005, 0xE017, 0x9F01]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xFC);
+
+    // MUL 255 x 255 : C on, Z off
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xEF0F, 0xEF1F, 0x9F01]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xFD);
+
+    // MUL 0 x 7 : Z on, C off
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE000, 0xE017, 0x9F01]);
+    step_n(&mut cpu, 2);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xFE);
+
+    // MULS and MULSU follow the same rule (-1 x 5 : C on, Z off)
+    for op in [0x0201, 0x0301] {
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[0xEF0F, 0xE015, op]);
+        step_n(&mut cpu, 2);
+        cpu.sreg = 0xFF;
+        step_n(&mut cpu, 1);
+        assert_eq!(cpu.sreg, 0xFD, "{op:#06X}");
     }
 }
