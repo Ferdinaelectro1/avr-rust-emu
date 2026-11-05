@@ -434,6 +434,41 @@ fn test_decode_bset_bclr_all_flags() {
     }
 }
 
+//BLD Rd s
+//BST Rd s
+#[test]
+fn test_decode_bst_bld() {
+    // BLD R16,0 / R16,7 / R0,0 / R31,7
+    assert_eq!(decode(0xF900), Instruction::Bld { rd: 16, b: 0 });
+    assert_eq!(decode(0xF907), Instruction::Bld { rd: 16, b: 7 });
+    assert_eq!(decode(0xF800), Instruction::Bld { rd: 0, b: 0 });
+    assert_eq!(decode(0xF9F7), Instruction::Bld { rd: 31, b: 7 });
+    // BST R16,0 / R16,7 / R0,0 / R31,7
+    assert_eq!(decode(0xFB00), Instruction::Bst { rd: 16, b: 0 });
+    assert_eq!(decode(0xFB07), Instruction::Bst { rd: 16, b: 7 });
+    assert_eq!(decode(0xFA00), Instruction::Bst { rd: 0, b: 0 });
+    assert_eq!(decode(0xFBF7), Instruction::Bst { rd: 31, b: 7 });
+}
+#[test]
+fn test_decode_bst_bld_all_registers_and_bits() {
+    // the word is built from rd and b, like the MOVW test
+    for rd in 0u8..32 {
+        for b in 0u8..8 {
+            let low = ((rd as u16) << 4) | b as u16;
+            assert_eq!(
+                decode(0xF800 | low),
+                Instruction::Bld { rd, b },
+                "BLD R{rd},{b}"
+            );
+            assert_eq!(
+                decode(0xFA00 | low),
+                Instruction::Bst { rd, b },
+                "BST R{rd},{b}"
+            );
+        }
+    }
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -3111,4 +3146,191 @@ fn test_execute_clc_then_ror() {
     step_n(&mut cpu, 2);
     assert_eq!(cpu.registers[16], 0x00);
     assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_decode_bst_bld_neighbours() {
+    // bit 3 set (reserved), SBRC, SBRS, BRBS, BRBC
+    for word in [
+        0xF808, 0xF80F, 0xFA08, 0xFC00, 0xFE00, 0xF000, 0xF400, 0xF7FF,
+    ] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Bst { .. } | Instruction::Bld { .. }
+            ),
+            "{word:#06X} must not decode as BST or BLD"
+        );
+    }
+    // BST and BLD do not decode as each other
+    assert!(!matches!(decode(0xF900), Instruction::Bst { .. }));
+    assert!(!matches!(decode(0xFB00), Instruction::Bld { .. }));
+}
+
+#[test]
+fn test_execute_bst_sets_t() {
+    // LDI R16, 0xA4 (1010 0100) / BST R16, 7 : bit 7 is 1
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xEA04, 0xFB07]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.sreg, FLAG_BIT_COPY);
+    assert_eq!(cpu.registers[16], 0xA4);
+
+    // BST R16, 2 : bit 2 is 1
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xEA04, 0xFB02]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.sreg, FLAG_BIT_COPY);
+}
+
+#[test]
+fn test_execute_bst_clears_t() {
+    // LDI R16, 0xA4 / BST R16, 6 : bit 6 is 0, T was on
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xEA04, 0xFB06]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = FLAG_BIT_COPY;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0x00);
+    assert_eq!(cpu.registers[16], 0xA4);
+}
+
+#[test]
+fn test_execute_bst_all_bits() {
+    for b in 0u8..8 {
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[0xFB00 | b as u16]);
+        cpu.registers[16] = 0xA4;
+        step_n(&mut cpu, 1);
+        let expected = if (0xA4u8 >> b) & 1 != 0 {
+            FLAG_BIT_COPY
+        } else {
+            0
+        };
+        assert_eq!(cpu.sreg, expected, "BST R16,{b} on 0xA4");
+        assert_eq!(cpu.registers[16], 0xA4, "BST R16,{b} must not change Rd");
+    }
+}
+
+#[test]
+fn test_execute_bst_keeps_other_flags() {
+    // bit 7 is 1 : sreg stays 0xFF
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xEA04, 0xFB07]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xFF);
+
+    // bit 6 is 0 : only T is cleared
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xEA04, 0xFB06]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xBF);
+}
+
+#[test]
+fn test_execute_bld_sets_bit() {
+    // LDI R17, 0 / BLD R17, 3 with T on : R17 = 0x08
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE010, 0xF913]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = FLAG_BIT_COPY;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[17], 0x08);
+    assert_eq!(cpu.sreg, FLAG_BIT_COPY);
+}
+
+#[test]
+fn test_execute_bld_clears_bit() {
+    // LDI R17, 0xFF / BLD R17, 3 with T off : R17 = 0xF7
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xEF1F, 0xF913]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[17], 0xF7);
+    assert_eq!(cpu.sreg, 0x00);
+}
+
+#[test]
+fn test_execute_bld_all_bits() {
+    for b in 0u8..8 {
+        // T on, register cleared : only bit b is set
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[0xF900 | b as u16]);
+        cpu.registers[16] = 0x00;
+        cpu.sreg = FLAG_BIT_COPY;
+        step_n(&mut cpu, 1);
+        assert_eq!(cpu.registers[16], 1u8 << b, "BLD R16,{b} with T on");
+
+        // T off, register full : only bit b is cleared
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[0xF900 | b as u16]);
+        cpu.registers[16] = 0xFF;
+        cpu.sreg = 0x00;
+        step_n(&mut cpu, 1);
+        assert_eq!(cpu.registers[16], !(1u8 << b), "BLD R16,{b} with T off");
+    }
+}
+
+#[test]
+fn test_execute_bld_keeps_sreg() {
+    // T on, every flag on : sreg stays 0xFF
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE010, 0xF913]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xFF);
+
+    // T off, every other flag on : sreg stays 0xBF
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xEF1F, 0xF913]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = 0xBF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xBF);
+}
+
+#[test]
+fn test_execute_bst_then_bld_copies_a_bit() {
+    // LDI R16, 0x80 / LDI R17, 0x02 / BST R16, 7 / BLD R17, 0
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE800, 0xE012, 0xFB07, 0xF910]);
+    step_n(&mut cpu, 4);
+    assert_eq!(cpu.registers[17], 0x03);
+    assert_eq!(cpu.registers[16], 0x80);
+    assert_eq!(cpu.sreg, FLAG_BIT_COPY);
+}
+
+#[test]
+fn test_execute_bst_then_bld_copies_a_zero() {
+    // LDI R16, 0 / LDI R17, 0xFF / BST R16, 0 / BLD R17, 7 : a 0 is copied
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE000, 0xEF1F, 0xFB00, 0xF917]);
+    step_n(&mut cpu, 4);
+    assert_eq!(cpu.registers[17], 0x7F);
+    assert_eq!(cpu.sreg, 0x00);
+}
+
+#[test]
+fn test_execute_bst_bld_extreme_registers() {
+    // BST R31, 7 then BLD R0, 0
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xFBF7, 0xF800]);
+    cpu.registers[31] = 0x80;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[0], 0x01);
+    assert_eq!(cpu.registers[31], 0x80);
+}
+
+#[test]
+fn test_execute_set_then_bld() {
+    // SET / BLD R16, 5 : SET prepares T, BLD pastes it
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9468, 0xF905]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0x20);
+    assert_eq!(cpu.sreg, FLAG_BIT_COPY);
 }

@@ -42,6 +42,8 @@ enum Instruction {
     Mulsu { rd: u8, rr: u8 },
     Bset { s: u8 },
     Bclr { s: u8 },
+    Bst { rd: u8, b: u8 },
+    Bld { rd: u8, b: u8 },
     Unknown(u16),
 }
 
@@ -169,6 +171,14 @@ fn decode(word: u16) -> Instruction {
         },
         w if w & 0xFF8F == 0x9488 => Instruction::Bclr {
             s: ((w >> 4) & 0x0007) as u8,
+        },
+        w if w & 0xFE08 == 0xF800 => Instruction::Bld {
+            rd: ((w >> 4) & 0x001F) as u8,
+            b: (w & 0x0007) as u8,
+        },
+        w if w & 0xFE08 == 0xFA00 => Instruction::Bst {
+            rd: ((w >> 4) & 0x001F) as u8,
+            b: (w & 0x0007) as u8,
         },
         _ => Instruction::Unknown(word),
     }
@@ -531,6 +541,22 @@ impl Cpu {
             }
             Instruction::Bclr { s } => {
                 self.sreg &= !(1u8 << s);
+                Ok(())
+            }
+            Instruction::Bld { rd, b } => {
+                if self.sreg & FLAG_BIT_COPY != 0 {
+                    self.registers[rd as usize] |= 1 << b;
+                } else {
+                    self.registers[rd as usize] &= !(1 << b);
+                }
+                Ok(())
+            }
+            Instruction::Bst { rd, b } => {
+                if self.registers[rd as usize] & (1 << b) != 0 {
+                    self.sreg |= FLAG_BIT_COPY;
+                } else {
+                    self.sreg &= !FLAG_BIT_COPY;
+                }
                 Ok(())
             }
         }
