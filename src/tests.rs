@@ -410,6 +410,30 @@ fn test_decode_mul_muls_mulsu() {
     assert_eq!(decode(0x0377), Instruction::Mulsu { rd: 23, rr: 23 });
 }
 
+//Bset s
+//Bclr s
+#[test]
+fn test_decode_bset_bclr() {
+    // SEC / SEI / SES : BSET 0, 7, 4
+    assert_eq!(decode(0x9408), Instruction::Bset { s: 0 });
+    assert_eq!(decode(0x9478), Instruction::Bset { s: 7 });
+    assert_eq!(decode(0x9448), Instruction::Bset { s: 4 });
+    // CLC / CLI / CLS : BCLR 0, 7, 4
+    assert_eq!(decode(0x9488), Instruction::Bclr { s: 0 });
+    assert_eq!(decode(0x94F8), Instruction::Bclr { s: 7 });
+    assert_eq!(decode(0x94C8), Instruction::Bclr { s: 4 });
+}
+#[test]
+fn test_decode_bset_bclr_all_flags() {
+    // the word is built from s, like the MOVW test
+    for s in 0u8..8 {
+        let bset = 0x9408u16 | ((s as u16) << 4);
+        let bclr = 0x9488u16 | ((s as u16) << 4);
+        assert_eq!(decode(bset), Instruction::Bset { s }, "BSET {s}");
+        assert_eq!(decode(bclr), Instruction::Bclr { s }, "BCLR {s}");
+    }
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -2917,4 +2941,174 @@ fn test_execute_mul_keeps_other_flags() {
         step_n(&mut cpu, 1);
         assert_eq!(cpu.sreg, 0xFD, "{op:#06X}");
     }
+}
+
+#[test]
+fn test_decode_bset_bclr_neighbours() {
+    // RET, RETI, SLEEP, BREAK, WDR, LPM, SPM : same low nibble, bit 8 set
+    // IJMP, DES, JMP, CALL : same group, other low nibble
+    for word in [
+        0x9508, 0x9518, 0x9588, 0x9598, 0x95A8, 0x95C8, 0x95E8, 0x9409, 0x940B, 0x940C, 0x940E,
+    ] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Bset { .. } | Instruction::Bclr { .. }
+            ),
+            "{word:#06X} must not decode as BSET or BCLR"
+        );
+    }
+    // COM / NEG / SWAP / INC share the 0x940x prefix but not the low nibble
+    for word in [0x9400, 0x9401, 0x9402, 0x9403] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Bset { .. } | Instruction::Bclr { .. }
+            ),
+            "{word:#06X} must not decode as BSET or BCLR"
+        );
+    }
+    // BSET and BCLR do not decode as each other
+    assert!(!matches!(decode(0x9408), Instruction::Bclr { .. }));
+    assert!(!matches!(decode(0x9488), Instruction::Bset { .. }));
+}
+
+#[test]
+fn test_execute_bset_bclr_aliases() {
+    // (word, sreg before, sreg after, name)
+    let cases = [
+        (0x9408u16, 0x00u8, 0x01u8, "SEC"),
+        (0x9418, 0x00, 0x02, "SEZ"),
+        (0x9428, 0x00, 0x04, "SEN"),
+        (0x9438, 0x00, 0x08, "SEV"),
+        (0x9448, 0x00, 0x10, "SES"),
+        (0x9458, 0x00, 0x20, "SEH"),
+        (0x9468, 0x00, 0x40, "SET"),
+        (0x9478, 0x00, 0x80, "SEI"),
+        (0x9488, 0xFF, 0xFE, "CLC"),
+        (0x9498, 0xFF, 0xFD, "CLZ"),
+        (0x94A8, 0xFF, 0xFB, "CLN"),
+        (0x94B8, 0xFF, 0xF7, "CLV"),
+        (0x94C8, 0xFF, 0xEF, "CLS"),
+        (0x94D8, 0xFF, 0xDF, "CLH"),
+        (0x94E8, 0xFF, 0xBF, "CLT"),
+        (0x94F8, 0xFF, 0x7F, "CLI"),
+    ];
+    for (word, before, after, name) in cases {
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[word]);
+        cpu.sreg = before;
+        step_n(&mut cpu, 1);
+        assert_eq!(cpu.sreg, after, "{name}");
+        assert_eq!(cpu.pc, 1, "{name} must advance PC by one word");
+    }
+}
+
+#[test]
+fn test_execute_bset_all_flags() {
+    for s in 0u8..8 {
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[0x9408u16 | ((s as u16) << 4)]);
+        cpu.sreg = 0x00;
+        step_n(&mut cpu, 1);
+        assert_eq!(cpu.sreg, 1u8 << s, "BSET {s} from 0x00");
+    }
+}
+
+#[test]
+fn test_execute_bclr_all_flags() {
+    for s in 0u8..8 {
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[0x9488u16 | ((s as u16) << 4)]);
+        cpu.sreg = 0xFF;
+        step_n(&mut cpu, 1);
+        assert_eq!(cpu.sreg, !(1u8 << s), "BCLR {s} from 0xFF");
+    }
+}
+
+#[test]
+fn test_execute_bset_bclr_keep_other_flags() {
+    // a mixed SREG : only the targeted flag may change
+    for s in 0u8..8 {
+        let mask = 1u8 << s;
+
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[0x9408u16 | ((s as u16) << 4)]);
+        cpu.sreg = 0xA5;
+        step_n(&mut cpu, 1);
+        assert_eq!(cpu.sreg, 0xA5 | mask, "BSET {s} on 0xA5");
+
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[0x9488u16 | ((s as u16) << 4)]);
+        cpu.sreg = 0xA5;
+        step_n(&mut cpu, 1);
+        assert_eq!(cpu.sreg, 0xA5 & !mask, "BCLR {s} on 0xA5");
+    }
+}
+
+#[test]
+fn test_execute_bset_bclr_idempotent() {
+    // SEC twice : still only C
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9408, 0x9408]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.sreg, FLAG_CARRY);
+
+    // CLC on a cleared SREG : nothing happens
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9488]);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0x00);
+}
+
+#[test]
+fn test_execute_bset_bclr_do_not_touch_registers() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0x55 / SEC / CLC
+    cpu.load_program(&[0xE505, 0x9408, 0x9488]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0x55);
+    assert_eq!(cpu.sreg, 0x00);
+}
+
+#[test]
+fn test_execute_sez_then_breq_jumps() {
+    let mut cpu = Cpu::new();
+    // SEZ / BREQ +1 / LDI R16, 1 (skipped) / LDI R17, 2
+    cpu.load_program(&[0x9418, 0xF009, 0xE001, 0xE012]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.pc, 3);
+}
+
+#[test]
+fn test_execute_clz_then_breq_does_not_jump() {
+    let mut cpu = Cpu::new();
+    // CLZ / BREQ +1 / LDI R16, 1 / LDI R17, 2
+    cpu.load_program(&[0x9498, 0xF009, 0xE001, 0xE012]);
+    cpu.sreg = FLAG_ZERO;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.pc, 2);
+}
+
+#[test]
+fn test_execute_sec_then_ror() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0 / SEC / ROR R16 : the old C enters bit 7
+    cpu.load_program(&[0xE000, 0x9408, 0x9507]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[16], 0x80);
+    // C = 0 (bit 0 was 0), N = 1, V = N xor C = 1, S = N xor V = 0
+    assert_eq!(cpu.sreg, FLAG_NEGATIVE | FLAG_OVERFLOW);
+}
+
+#[test]
+fn test_execute_clc_then_ror() {
+    let mut cpu = Cpu::new();
+    // LDI R16, 0 / CLC / ROR R16 : a 0 enters bit 7
+    cpu.load_program(&[0xE000, 0x9488, 0x9507]);
+    step_n(&mut cpu, 1);
+    cpu.sreg = FLAG_CARRY;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0x00);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
 }

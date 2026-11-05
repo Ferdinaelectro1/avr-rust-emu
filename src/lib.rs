@@ -40,6 +40,8 @@ enum Instruction {
     Mul { rd: u8, rr: u8 },
     Muls { rd: u8, rr: u8 },
     Mulsu { rd: u8, rr: u8 },
+    Bset { s: u8 },
+    Bclr { s: u8 },
     Unknown(u16),
 }
 
@@ -161,6 +163,12 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFF88 == 0x0300 => Instruction::Mulsu {
             rd: (((w >> 4) & 0x0007) + 16) as u8,
             rr: ((w & 0x0007) + 16) as u8,
+        },
+        w if w & 0xFF8F == 0x9408 => Instruction::Bset {
+            s: ((w >> 4) & 0x0007) as u8,
+        },
+        w if w & 0xFF8F == 0x9488 => Instruction::Bclr {
+            s: ((w >> 4) & 0x0007) as u8,
         },
         _ => Instruction::Unknown(word),
     }
@@ -515,6 +523,14 @@ impl Cpu {
                 self.registers[0] = (signed_res & 0x00FF) as u8;
                 self.registers[1] = ((signed_res >> 8) & 0x00FF) as u8;
                 self.update_flags_mul(signed_res as u16);
+                Ok(())
+            }
+            Instruction::Bset { s } => {
+                self.sreg |= 1u8 << s;
+                Ok(())
+            }
+            Instruction::Bclr { s } => {
+                self.sreg &= !(1u8 << s);
                 Ok(())
             }
         }
