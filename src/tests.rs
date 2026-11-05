@@ -4088,3 +4088,159 @@ fn test_execute_lds_second_word_outside_flash_is_an_error() {
     assert!(cpu.step().is_err());
     assert_eq!(cpu.registers[16], 0x11);
 }
+
+#[test]
+fn test_decode_rcall_ret() {
+    assert_eq!(decode(0xD000), Instruction::Rcall { k: 0 });
+    assert_eq!(decode(0xD001), Instruction::Rcall { k: 1 });
+    assert_eq!(decode(0xDFFF), Instruction::Rcall { k: -1 });
+    assert_eq!(decode(0xD7FF), Instruction::Rcall { k: 2047 });
+    assert_eq!(decode(0xD800), Instruction::Rcall { k: -2048 });
+    assert_eq!(decode(0x9508), Instruction::Ret);
+}
+
+#[test]
+fn test_decode_rcall_ret_neighbours() {
+    // RJMP, LDI, RETI, ICALL, SLEEP, BSET, ROR, a 0x95xx word
+    for word in [
+        0xC000, 0xE000, 0x9518, 0x9509, 0x9588, 0x9408, 0x9507, 0x9500,
+    ] {
+        assert!(
+            !matches!(decode(word), Instruction::Rcall { .. } | Instruction::Ret),
+            "{word:#06X} must not decode as RCALL or RET"
+        );
+    }
+}
+
+#[test]
+fn test_execute_rcall_pushes_return_address() {
+    // RCALL at pc = 0x122 : return address 0x0123, high byte at the lower address
+    let mut cpu = Cpu::new();
+    cpu.flash[0x122] = 0xD001;
+    cpu.pc = 0x122;
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sram[0x08FE - 0x100], 0x01);
+    assert_eq!(cpu.sram[0x08FF - 0x100], 0x23);
+    assert_eq!(cpu.sp, 0x08FD);
+    assert_eq!(cpu.pc, 0x123 + 1);
+}
+
+#[test]
+fn test_execute_rcall_destinations() {
+    // k = 0 : lands on the next instruction
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xD000]);
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.pc, 1);
+
+    // k = +1 : skips one word
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xD001]);
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.pc, 2);
+
+    // k = -1 at pc = 5 : lands on itself
+    let mut cpu = Cpu::new();
+    cpu.flash[5] = 0xDFFF;
+    cpu.pc = 5;
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.pc, 5);
+
+    // k = +1 on the last word of the flash : wraps around
+    let mut cpu = Cpu::new();
+    cpu.flash[FLASH_SIZE - 1] = 0xD001;
+    cpu.pc = (FLASH_SIZE - 1) as u16;
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.pc, 1);
+}
+
+#[test]
+fn test_execute_ret_pops_return_address() {
+    // bytes prepared by hand : high 0x01 at 0x08FE, low 0x23 at 0x08FF
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9508]);
+    cpu.sp = 0x08FD;
+    cpu.sram[0x08FE - 0x100] = 0x01;
+    cpu.sram[0x08FF - 0x100] = 0x23;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.pc, 0x0123);
+    assert_eq!(cpu.sp, 0x08FF);
+}
+
+#[test]
+fn test_execute_rcall_then_ret_round_trip() {
+    // 0: RCALL +1 (dest 2) / 1: LDI R17,9 / 2: RET
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xD001, 0xE019, 0x9508]);
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.pc, 1);
+    assert_eq!(cpu.sp, 0x08FF);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[17], 9);
+}
+
+#[test]
+fn test_execute_nested_calls() {
+    // 0: RCALL +2 (dest 3, ret 1) / 3: RCALL +1 (dest 5, ret 4) / 5: RET / 4: RET
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xD002, 0x0000, 0x0000, 0xD001, 0x9508, 0x9508]);
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.sp, 0x08FB);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.pc, 4);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.pc, 1);
+    assert_eq!(cpu.sp, 0x08FF);
+}
+
+#[test]
+fn test_execute_rcall_ret_keep_flags() {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xD000, 0x9508]);
+    cpu.sp = 0x08FF;
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.sreg, 0xFF);
+}
+
+#[test]
+fn test_execute_rcall_then_in_spl() {
+    // RCALL +0 / IN R16, 0x3D
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xD000, 0xB70D]);
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0xFD);
+}
+
+#[test]
+fn test_execute_ret_beyond_ramend_is_an_error() {
+    // sp = 0x08FF : RET reads at 0x0900
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9508]);
+    cpu.sp = 0x08FF;
+    assert!(cpu.step().is_err());
+}
+
+#[test]
+fn test_execute_function_call_integration() {
+    // 0: LDI R16,0xFF / 1: OUT 0x3D,R16 / 2: LDI R16,0x08 / 3: OUT 0x3E,R16
+    // 4: RCALL +2 (dest 7) / 5: MOV R17,R16 / 6: filler
+    // 7: INC R16 / 8: RET
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[
+        0xEF0F, 0xBF0D, 0xE008, 0xBF0E, 0xD002, 0x2F10, 0x0000, 0x9503, 0x9508,
+    ]);
+    step_n(&mut cpu, 8);
+    assert_eq!(cpu.registers[16], 9);
+    assert_eq!(cpu.registers[17], 9);
+    assert_eq!(cpu.sp, 0x08FF);
+    assert_eq!(cpu.pc, 6);
+}

@@ -53,6 +53,8 @@ enum Instruction {
     Pop { rd: u8 },
     Lds { rd: u8 },
     Sts { rr: u8 },
+    Rcall { k: i16 },
+    Ret,
     Unknown(u16),
 }
 
@@ -213,6 +215,10 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFE0F == 0x900F => Instruction::Pop { rd: decode_dest(w) },
         w if w & 0xFE0F == 0x9000 => Instruction::Lds { rd: decode_dest(w) },
         w if w & 0xFE0F == 0x9200 => Instruction::Sts { rr: decode_dest(w) },
+        w if w & 0xF000 == 0xD000 => Instruction::Rcall {
+            k: sign_extend(w, 12),
+        },
+        w if w & 0xFFFF == 0x9508 => Instruction::Ret,
         _ => Instruction::Unknown(word),
     }
 }
@@ -648,6 +654,23 @@ impl Cpu {
             Instruction::Lds { rd } => {
                 let k = self.fetch()?;
                 self.registers[rd as usize] = self.read_data(k)?;
+                Ok(())
+            }
+            Instruction::Rcall { k } => {
+                let next_instruction = self.pc;
+                self.write_data(self.sp, (next_instruction & 0x00FF) as u8)?;
+                self.sp = self.sp.wrapping_sub(1);
+                self.write_data(self.sp, ((next_instruction >> 8) & 0x00FF) as u8)?;
+                self.sp = self.sp.wrapping_sub(1);
+                self.pc = (self.pc as i32 + k as i32).rem_euclid(FLASH_SIZE as i32) as u16;
+                Ok(())
+            }
+            Instruction::Ret => {
+                self.sp = self.sp.wrapping_add(1);
+                let pc_ret_h = self.read_data(self.sp)?;
+                self.sp = self.sp.wrapping_add(1);
+                let pc_ret_l = self.read_data(self.sp)?;
+                self.pc = ((pc_ret_h as u16) << 8) | (pc_ret_l as u16);
                 Ok(())
             }
         }
