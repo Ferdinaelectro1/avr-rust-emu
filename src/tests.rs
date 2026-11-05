@@ -376,6 +376,21 @@ fn test_decode_adiw_sbiw() {
     assert_eq!(decode(0x978A), Instruction::Sbiw { rd: 24, k: 42 });
 }
 
+//MOVW Rd, Rr
+#[test]
+fn test_decode_movw() {
+    // MOVW R24, R26 / R26, R24
+    assert_eq!(decode(0x01CD), Instruction::Movw { rd: 24, rr: 26 });
+    assert_eq!(decode(0x01DC), Instruction::Movw { rd: 26, rr: 24 });
+    // bounds : R0,R0 and R30,R30
+    assert_eq!(decode(0x0100), Instruction::Movw { rd: 0, rr: 0 });
+    assert_eq!(decode(0x01FF), Instruction::Movw { rd: 30, rr: 30 });
+    // destination and source with different nibbles
+    assert_eq!(decode(0x0108), Instruction::Movw { rd: 0, rr: 16 });
+    assert_eq!(decode(0x0189), Instruction::Movw { rd: 16, rr: 18 });
+    assert_eq!(decode(0x01EF), Instruction::Movw { rd: 28, rr: 30 });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -2569,5 +2584,107 @@ fn test_execute_adiw_sbiw_flag_preservation() {
         cpu.sreg = 0xFF;
         step_n(&mut cpu, 1);
         assert_eq!(cpu.sreg, 0xE0);
+    }
+}
+
+#[test]
+fn test_decode_movw_neighbours() {
+    // 0x00FF, MULS, the 0x0300 group, CPC and ADD are not MOVW
+    for word in [0x00FF, 0x0200, 0x0300, 0x0400, 0x0BFF] {
+        assert!(
+            !matches!(decode(word), Instruction::Movw { .. }),
+            "{word:#06X} must not decode as MOVW"
+        );
+    }
+    // NOP and CPC are still decoded
+    assert!(matches!(decode(0x0000), Instruction::Nop));
+    assert_eq!(decode(0x0400), Instruction::Cpc { rd: 0, rr: 0 });
+    // 0x00FF is not an instruction
+    assert!(matches!(decode(0x00FF), Instruction::Unknown { .. }));
+}
+
+#[test]
+fn test_execute_movw() {
+    // LDI R23, 0x77 = 0xE777 and LDI R28, 0x88 = 0xE8C8 : guards on both sides
+    // LDI R26, 0x34 = 0xE3A4 ; LDI R27, 0x12 = 0xE1B2 ; MOVW R24, R26 = 0x01CD
+    let cpu = run_words(&[0xE777, 0xE8C8, 0xE3A4, 0xE1B2, 0x01CD]);
+    assert_eq!(reg_pair(&cpu, 24), 0x1234, "destination");
+    assert_eq!(reg_pair(&cpu, 26), 0x1234, "source untouched");
+    assert_eq!(cpu.registers[23], 0x77, "R23 untouched");
+    assert_eq!(cpu.registers[28], 0x88, "R28 untouched");
+}
+
+#[test]
+fn test_execute_movw_low_to_high() {
+    // LDI R16, 0xAB = 0xEA0B ; LDI R17, 0xCD = 0xEC1D ; MOVW R0, R16 = 0x0108
+    let cpu = run_words(&[0xEA0B, 0xEC1D, 0x0108]);
+    assert_eq!(reg_pair(&cpu, 0), 0xCDAB, "destination");
+    assert_eq!(reg_pair(&cpu, 16), 0xCDAB, "source untouched");
+    assert_eq!(cpu.registers[2], 0x00, "R2 untouched");
+}
+
+#[test]
+fn test_execute_movw_top_pair() {
+    // LDI R28, 0xAB = 0xEACB ; LDI R29, 0xCD = 0xECDD ; MOVW R30, R28 = 0x01FE
+    // R31 must receive the high byte of the source
+    let cpu = run_words(&[0xEACB, 0xECDD, 0x01FE]);
+    assert_eq!(cpu.registers[30], 0xAB);
+    assert_eq!(cpu.registers[31], 0xCD);
+}
+
+#[test]
+fn test_execute_movw_same_pair() {
+    // MOVW R24, R24 = 0x01CC : nothing changes
+    let cpu = run_words(&[0xE3A4, 0xE1B2, 0x01CC]);
+    assert_eq!(reg_pair(&cpu, 24), 0x0000);
+    assert_eq!(reg_pair(&cpu, 26), 0x1234);
+}
+
+#[test]
+fn test_execute_movw_all_pairs() {
+    // every destination pair with every source pair, built from the word itself :
+    // catches a wrong factor of 2 and any register copied by mistake
+    for d in (0..32usize).step_by(2) {
+        for s in (0..32usize).step_by(2) {
+            let mut cpu = Cpu::new();
+            cpu.registers[s] = 0x11;
+            cpu.registers[s + 1] = 0x22;
+            let word = 0x0100 | (((d / 2) as u16) << 4) | ((s / 2) as u16);
+            cpu.load_program(&[word]);
+            step_n(&mut cpu, 1);
+            assert_eq!(cpu.registers[d], 0x11, "MOVW R{d}, R{s} : low byte");
+            assert_eq!(cpu.registers[d + 1], 0x22, "MOVW R{d}, R{s} : high byte");
+            // every other register is still 0
+            for i in 0..32usize {
+                if i != d && i != d + 1 && i != s && i != s + 1 {
+                    assert_eq!(cpu.registers[i], 0, "MOVW R{d}, R{s} : R{i} touched");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_execute_movw_no_flag() {
+    // copy of 0x0000 : Z must stay off ; copy of 0x8000 : N must stay off
+    // LDI R27, 0x80 = 0xE8B0 ; LDI R26, 0 = 0xE0A0
+    let cpu = run_words(&[0xE0A0, 0xE0B0, 0x01CD]);
+    assert_eq!(cpu.sreg, 0);
+    let cpu = run_words(&[0xE0A0, 0xE8B0, 0x01CD]);
+    assert_eq!(reg_pair(&cpu, 24), 0x8000);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_movw_keeps_all_flags() {
+    // every flag on before, then every flag off before : SREG must not change
+    for sreg in [0xFFu8, 0x00u8] {
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[0xE3A4, 0xE1B2, 0x01CD]);
+        step_n(&mut cpu, 2);
+        cpu.sreg = sreg;
+        step_n(&mut cpu, 1);
+        assert_eq!(reg_pair(&cpu, 24), 0x1234);
+        assert_eq!(cpu.sreg, sreg);
     }
 }

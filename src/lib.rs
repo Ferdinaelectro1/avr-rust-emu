@@ -36,6 +36,7 @@ enum Instruction {
     Swap { rd: u8 },
     Adiw { rd: u8, k: u8 },
     Sbiw { rd: u8, k: u8 },
+    Movw { rd: u8, rr: u8 },
     Unknown(u16),
 }
 
@@ -141,6 +142,10 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFF00 == 0x9700 => Instruction::Sbiw {
             rd: 24 + 2 * ((w >> 4) & 0x0003) as u8,
             k: (((w >> 2) & 0x0030) | (w & 0x000F)) as u8,
+        },
+        w if w & 0xFF00 == 0x0100 => Instruction::Movw {
+            rd: 2 * ((w >> 4) & 0x000F) as u8,
+            rr: 2 * (w & 0x000F) as u8,
         },
         _ => Instruction::Unknown(word),
     }
@@ -467,6 +472,11 @@ impl Cpu {
                 self.registers[(rd + 1) as usize] = ((res >> 8) & 0x00FF) as u8;
                 self.registers[rd as usize] = (res & 0x00FF) as u8;
                 self.update_flags_word(rdw, res, false);
+                Ok(())
+            }
+            Instruction::Movw { rd, rr } => {
+                self.registers[rd as usize] = self.registers[rr as usize];
+                self.registers[(rd + 1) as usize] = self.registers[(rr + 1) as usize];
                 Ok(())
             }
         }
