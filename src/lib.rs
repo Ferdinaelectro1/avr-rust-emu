@@ -51,6 +51,8 @@ enum Instruction {
     Out { a: u8, rr: u8 },
     Push { rr: u8 },
     Pop { rd: u8 },
+    Lds { rd: u8 },
+    Sts { rr: u8 },
     Unknown(u16),
 }
 
@@ -209,6 +211,8 @@ fn decode(word: u16) -> Instruction {
         },
         w if w & 0xFE0F == 0x920F => Instruction::Push { rr: decode_dest(w) },
         w if w & 0xFE0F == 0x900F => Instruction::Pop { rd: decode_dest(w) },
+        w if w & 0xFE0F == 0x9000 => Instruction::Lds { rd: decode_dest(w) },
+        w if w & 0xFE0F == 0x9200 => Instruction::Sts { rr: decode_dest(w) },
         _ => Instruction::Unknown(word),
     }
 }
@@ -634,6 +638,16 @@ impl Cpu {
             Instruction::Push { rr } => {
                 self.write_data(self.sp, self.registers[rr as usize])?;
                 self.sp = self.sp.wrapping_sub(1);
+                Ok(())
+            }
+            Instruction::Sts { rr } => {
+                let k = self.fetch()?;
+                self.write_data(k, self.registers[rr as usize])?;
+                Ok(())
+            }
+            Instruction::Lds { rd } => {
+                let k = self.fetch()?;
+                self.registers[rd as usize] = self.read_data(k)?;
                 Ok(())
             }
         }

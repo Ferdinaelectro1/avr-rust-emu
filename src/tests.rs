@@ -3894,3 +3894,197 @@ fn test_execute_pop_beyond_ramend_is_an_error() {
     assert!(cpu.step().is_err());
     assert_eq!(cpu.registers[16], 0x99);
 }
+
+#[test]
+fn test_decode_lds_sts() {
+    // LDS R0 / R16 / R31
+    assert_eq!(decode(0x9000), Instruction::Lds { rd: 0 });
+    assert_eq!(decode(0x9100), Instruction::Lds { rd: 16 });
+    assert_eq!(decode(0x91F0), Instruction::Lds { rd: 31 });
+    // STS R0 / R16 / R31
+    assert_eq!(decode(0x9200), Instruction::Sts { rr: 0 });
+    assert_eq!(decode(0x9300), Instruction::Sts { rr: 16 });
+    assert_eq!(decode(0x93F0), Instruction::Sts { rr: 31 });
+}
+
+#[test]
+fn test_decode_lds_sts_all_registers() {
+    for r in 0u8..32 {
+        let low = (r as u16) << 4;
+        assert_eq!(decode(0x9000 | low), Instruction::Lds { rd: r }, "LDS R{r}");
+        assert_eq!(decode(0x9200 | low), Instruction::Sts { rr: r }, "STS R{r}");
+    }
+}
+
+#[test]
+fn test_decode_lds_sts_neighbours() {
+    // POP, PUSH, LD Rd,Z+ , LD Rd,-X, ST -X, ST X+
+    for word in [0x900F, 0x920F, 0x9001, 0x900E, 0x920E, 0x920D, 0x9400] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Lds { .. } | Instruction::Sts { .. }
+            ),
+            "{word:#06X} must not decode as LDS or STS"
+        );
+    }
+    // LDS and STS do not decode as each other
+    assert!(!matches!(decode(0x9100), Instruction::Sts { .. }));
+    assert!(!matches!(decode(0x9300), Instruction::Lds { .. }));
+}
+
+#[test]
+fn test_execute_lds_from_sram() {
+    // LDS R16, 0x0100
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9100, 0x0100]);
+    cpu.sram[0] = 0x5A;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0x5A);
+    assert_eq!(cpu.pc, 2);
+    assert_eq!(cpu.sram[0], 0x5A);
+}
+
+#[test]
+fn test_execute_lds_from_io() {
+    // LDS R16, 0x0025 (PORTB)
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9100, 0x0025]);
+    cpu.io[0x05] = 0xAA;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0xAA);
+}
+
+#[test]
+fn test_execute_lds_from_register() {
+    // LDS R16, 0x0010 (R16 itself)
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9110, 0x0011]);
+    cpu.registers[17] = 0x33;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[17], 0x33);
+    // LDS R17, 0x0010 : copy R16 into R17
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9110, 0x0010]);
+    cpu.registers[16] = 0x77;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[17], 0x77);
+}
+
+#[test]
+fn test_execute_lds_from_sreg() {
+    // LDS R16, 0x005F (SREG)
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9100, 0x005F]);
+    cpu.sreg = 0x5A;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0x5A);
+    assert_eq!(cpu.sreg, 0x5A);
+}
+
+#[test]
+fn test_execute_sts_to_sram() {
+    // STS 0x0100, R16
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9300, 0x0100]);
+    cpu.registers[16] = 0x42;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sram[0], 0x42);
+    assert_eq!(cpu.registers[16], 0x42);
+    assert_eq!(cpu.pc, 2);
+}
+
+#[test]
+fn test_execute_sts_to_io() {
+    // STS 0x0025, R16 (PORTB)
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9300, 0x0025]);
+    cpu.registers[16] = 0x20;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.io[0x05], 0x20);
+}
+
+#[test]
+fn test_execute_sts_to_register() {
+    // STS 0x0011, R16 : copy R16 into R17
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9300, 0x0011]);
+    cpu.registers[16] = 0x99;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[17], 0x99);
+}
+
+#[test]
+fn test_execute_sts_to_sreg_and_sp() {
+    // STS 0x005F, R16 writes sreg
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9300, 0x005F]);
+    cpu.registers[16] = 0xA5;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xA5);
+
+    // STS 0x005D, R16 (SPL) / STS 0x005E, R17 (SPH)
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9300, 0x005D, 0x9310, 0x005E]);
+    cpu.registers[16] = 0xFF;
+    cpu.registers[17] = 0x08;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.sp, 0x08FF);
+}
+
+#[test]
+fn test_execute_sts_then_lds_round_trip() {
+    // LDI R16,0x5A / STS 0x0100,R16 / LDS R17,0x0100
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE50A, 0x9300, 0x0100, 0x9110, 0x0100]);
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[17], 0x5A);
+    assert_eq!(cpu.pc, 5);
+}
+
+#[test]
+fn test_execute_lds_sts_second_word_is_not_executed() {
+    // k = 0xE0FF looks like LDI R31,0x0F but is only an address : it is out of range here
+    // so use a valid look-alike : k = 0x0100 is data, then a real LDI follows
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9100, 0x0100, 0xE00A]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.pc, 3);
+    assert_eq!(cpu.registers[16], 0x0A);
+}
+
+#[test]
+fn test_execute_lds_sts_keep_flags() {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9100, 0x0100, 0x9300, 0x0101]);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.sreg, 0xFF);
+}
+
+#[test]
+fn test_execute_lds_sts_beyond_ramend_is_an_error() {
+    // LDS R16, 0x0900 : past RAMEND, R16 untouched
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9100, 0x0900]);
+    cpu.registers[16] = 0x11;
+    assert!(cpu.step().is_err());
+    assert_eq!(cpu.registers[16], 0x11);
+
+    // STS 0x0900, R16 : error
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9300, 0x0900]);
+    assert!(cpu.step().is_err());
+}
+
+#[test]
+fn test_execute_lds_second_word_outside_flash_is_an_error() {
+    // LDS as the very last word of the flash : the second fetch fails
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9100]);
+    cpu.pc = (FLASH_SIZE - 1) as u16;
+    cpu.flash[FLASH_SIZE - 1] = 0x9100;
+    cpu.registers[16] = 0x11;
+    assert!(cpu.step().is_err());
+    assert_eq!(cpu.registers[16], 0x11);
+}
