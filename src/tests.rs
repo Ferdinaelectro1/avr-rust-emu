@@ -3600,3 +3600,144 @@ fn test_execute_fmul_family_do_not_touch_pc_beyond_one_word() {
     step_n(&mut cpu, 3);
     assert_eq!(cpu.pc, 3);
 }
+
+#[test]
+fn test_decode_in_out() {
+    // IN R16,0x3F / R31,0x3F / R0,0x00 / R16,0x05
+    assert_eq!(decode(0xB70F), Instruction::In { rd: 16, a: 0x3F });
+    assert_eq!(decode(0xB7FF), Instruction::In { rd: 31, a: 0x3F });
+    assert_eq!(decode(0xB000), Instruction::In { rd: 0, a: 0x00 });
+    assert_eq!(decode(0xB105), Instruction::In { rd: 16, a: 0x05 });
+    // OUT 0x3F,R16 / 0x3F,R31 / 0x00,R0 / 0x3D,R28 / 0x3E,R29
+    assert_eq!(decode(0xBF0F), Instruction::Out { a: 0x3F, rr: 16 });
+    assert_eq!(decode(0xBFFF), Instruction::Out { a: 0x3F, rr: 31 });
+    assert_eq!(decode(0xB800), Instruction::Out { a: 0x00, rr: 0 });
+    assert_eq!(decode(0xBFCD), Instruction::Out { a: 0x3D, rr: 28 });
+    assert_eq!(decode(0xBFDE), Instruction::Out { a: 0x3E, rr: 29 });
+}
+
+#[test]
+fn test_decode_in_out_all_addresses_and_registers() {
+    // the word is built from a and r, like the BST/BLD test
+    for a in 0u8..64 {
+        for r in 0u8..32 {
+            let low = (((a as u16) & 0x30) << 5) | ((a as u16) & 0x0F) | ((r as u16) << 4);
+            assert_eq!(
+                decode(0xB000 | low),
+                Instruction::In { rd: r, a },
+                "IN R{r},{a:#04X}"
+            );
+            assert_eq!(
+                decode(0xB800 | low),
+                Instruction::Out { a, rr: r },
+                "OUT {a:#04X},R{r}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_decode_in_out_neighbours() {
+    // STD zone, MUL, RJMP, and the last LDD/STD words
+    for word in [0xA000, 0xA800, 0xAFFF, 0x9FFF, 0xC000] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::In { .. } | Instruction::Out { .. }
+            ),
+            "{word:#06X} must not decode as IN or OUT"
+        );
+    }
+    // IN and OUT do not decode as each other
+    assert!(!matches!(decode(0xB000), Instruction::Out { .. }));
+    assert!(!matches!(decode(0xB800), Instruction::In { .. }));
+}
+
+#[test]
+fn test_execute_in_reads_io() {
+    // IN R16, 0x05 : PORTB is data address 0x25, io[5]
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xB105]);
+    cpu.io[0x05] = 0xAA;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0xAA);
+    assert_eq!(cpu.io[0x05], 0xAA);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_out_writes_io() {
+    // LDI R16, 0x55 / OUT 0x05, R16
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE505, 0xB905]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.io[0x05], 0x55);
+    assert_eq!(cpu.registers[16], 0x55);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_out_does_not_write_registers() {
+    // OUT 0x05 must land in io, not in R5 (data address 0x05)
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xB905]);
+    cpu.registers[16] = 0x55;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[5], 0x00);
+    assert_eq!(cpu.io[0x05], 0x55);
+}
+
+#[test]
+fn test_execute_out_in_sreg() {
+    // OUT 0x3F, R16 writes sreg
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xEA05, 0xBF0F]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.sreg, 0xA5);
+
+    // IN R16, 0x3F reads sreg
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xB70F]);
+    cpu.sreg = 0x5A;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0x5A);
+    assert_eq!(cpu.sreg, 0x5A);
+}
+
+#[test]
+fn test_execute_out_in_sp() {
+    // LDI R16,0xFF / OUT 0x3D,R16 / LDI R16,0x08 / OUT 0x3E,R16
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xEF0F, 0xBF0D, 0xE008, 0xBF0E]);
+    step_n(&mut cpu, 4);
+    assert_eq!(cpu.sp, 0x08FF);
+
+    // IN R17,0x3D (SPL) / IN R18,0x3E (SPH)
+    cpu.load_program(&[0xB71D, 0xB72E]);
+    cpu.pc = 0;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[17], 0xFF);
+    assert_eq!(cpu.registers[18], 0x08);
+}
+
+#[test]
+fn test_execute_avr_gcc_startup_clr_r1_out_sreg() {
+    // CLR R1 / OUT 0x3F, R1 : SREG is cleared
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x2411, 0xBE1F]);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0x00);
+}
+
+#[test]
+fn test_execute_in_out_keep_flags() {
+    // IN R16,0x05 and OUT 0x05,R16 never touch sreg
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xB105, 0xB905]);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.sreg, 0xFF);
+}

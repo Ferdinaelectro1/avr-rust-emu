@@ -47,6 +47,8 @@ enum Instruction {
     Fmul { rd: u8, rr: u8 },
     Fmuls { rd: u8, rr: u8 },
     Fmulsu { rd: u8, rr: u8 },
+    In { rd: u8, a: u8 },
+    Out { a: u8, rr: u8 },
     Unknown(u16),
 }
 
@@ -194,6 +196,14 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFF88 == 0x0388 => Instruction::Fmulsu {
             rd: (((w >> 4) & 0x0007) + 16) as u8,
             rr: ((w & 0x0007) + 16) as u8,
+        },
+        w if w & 0xF800 == 0xB000 => Instruction::In {
+            rd: ((w >> 4) & 0x001F) as u8,
+            a: (((w >> 5) & 0x0030) | (w & 0x000F)) as u8,
+        },
+        w if w & 0xF800 == 0xB800 => Instruction::Out {
+            a: (((w >> 5) & 0x0030) | (w & 0x000F)) as u8,
+            rr: ((w >> 4) & 0x001F) as u8,
         },
         _ => Instruction::Unknown(word),
     }
@@ -602,6 +612,14 @@ impl Cpu {
                 self.registers[0] = res as u8;
                 self.registers[1] = (res >> 8) as u8;
                 self.update_flags_fmul(product, res);
+                Ok(())
+            }
+            Instruction::Out { a, rr } => {
+                self.write_data(a as u16 + IO_START, self.registers[rr as usize])?;
+                Ok(())
+            }
+            Instruction::In { rd, a } => {
+                self.registers[rd as usize] = self.read_data(a as u16 + IO_START)?;
                 Ok(())
             }
         }
