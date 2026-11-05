@@ -44,6 +44,9 @@ enum Instruction {
     Bclr { s: u8 },
     Bst { rd: u8, b: u8 },
     Bld { rd: u8, b: u8 },
+    Fmul { rd: u8, rr: u8 },
+    Fmuls { rd: u8, rr: u8 },
+    Fmulsu { rd: u8, rr: u8 },
     Unknown(u16),
 }
 
@@ -179,6 +182,18 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFE08 == 0xFA00 => Instruction::Bst {
             rd: ((w >> 4) & 0x001F) as u8,
             b: (w & 0x0007) as u8,
+        },
+        w if w & 0xFF88 == 0x0308 => Instruction::Fmul {
+            rd: (((w >> 4) & 0x0007) + 16) as u8,
+            rr: ((w & 0x0007) + 16) as u8,
+        },
+        w if w & 0xFF88 == 0x0380 => Instruction::Fmuls {
+            rd: (((w >> 4) & 0x0007) + 16) as u8,
+            rr: ((w & 0x0007) + 16) as u8,
+        },
+        w if w & 0xFF88 == 0x0388 => Instruction::Fmulsu {
+            rd: (((w >> 4) & 0x0007) + 16) as u8,
+            rr: ((w & 0x0007) + 16) as u8,
         },
         _ => Instruction::Unknown(word),
     }
@@ -559,6 +574,36 @@ impl Cpu {
                 }
                 Ok(())
             }
+            Instruction::Fmul { rd, rr } => {
+                let a = self.registers[rd as usize] as u16;
+                let b = self.registers[rr as usize] as u16;
+                let product = a * b; // max 255 * 255 = 65025, fits in u16
+                let res = product << 1;
+                self.registers[0] = res as u8;
+                self.registers[1] = (res >> 8) as u8;
+                self.update_flags_fmul(product, res);
+                Ok(())
+            }
+            Instruction::Fmuls { rd, rr } => {
+                let a = self.registers[rd as usize] as i8 as i16;
+                let b = self.registers[rr as usize] as i8 as i16;
+                let product = (a * b) as u16;
+                let res = product << 1;
+                self.registers[0] = res as u8;
+                self.registers[1] = (res >> 8) as u8;
+                self.update_flags_fmul(product, res);
+                Ok(())
+            }
+            Instruction::Fmulsu { rd, rr } => {
+                let a = self.registers[rd as usize] as i8 as i16;
+                let b = self.registers[rr as usize] as i16; // unsigned: u8 -> i16 directly
+                let product = (a * b) as u16;
+                let res = product << 1;
+                self.registers[0] = res as u8;
+                self.registers[1] = (res >> 8) as u8;
+                self.update_flags_fmul(product, res);
+                Ok(())
+            }
         }
     }
 
@@ -747,6 +792,16 @@ impl Cpu {
         }
         if res & 0x8000 != 0 {
             self.sreg |= FLAG_CARRY;
+        }
+    }
+
+    fn update_flags_fmul(&mut self, product: u16, res: u16) {
+        self.sreg &= !(FLAG_CARRY | FLAG_ZERO);
+        if product & 0x8000 != 0 {
+            self.sreg |= FLAG_CARRY;
+        }
+        if res == 0 {
+            self.sreg |= FLAG_ZERO;
         }
     }
 

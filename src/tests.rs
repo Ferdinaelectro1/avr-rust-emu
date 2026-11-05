@@ -469,6 +469,48 @@ fn test_decode_bst_bld_all_registers_and_bits() {
     }
 }
 
+//FMUL rd, rr
+//FMULS rd, rr
+//FMULSU rd, rr
+#[test]
+fn test_decode_fmul_family() {
+    // FMUL R16,R16 / R16,R17 / R23,R23
+    assert_eq!(decode(0x0308), Instruction::Fmul { rd: 16, rr: 16 });
+    assert_eq!(decode(0x0309), Instruction::Fmul { rd: 16, rr: 17 });
+    assert_eq!(decode(0x037F), Instruction::Fmul { rd: 23, rr: 23 });
+    // FMULS R16,R16 / R23,R23
+    assert_eq!(decode(0x0380), Instruction::Fmuls { rd: 16, rr: 16 });
+    assert_eq!(decode(0x03F7), Instruction::Fmuls { rd: 23, rr: 23 });
+    // FMULSU R16,R16 / R23,R23
+    assert_eq!(decode(0x0388), Instruction::Fmulsu { rd: 16, rr: 16 });
+    assert_eq!(decode(0x03FF), Instruction::Fmulsu { rd: 23, rr: 23 });
+}
+#[test]
+fn test_decode_fmul_family_all_registers() {
+    // the word is built from d and r, like the MOVW test
+    for d in 0u8..8 {
+        for r in 0u8..8 {
+            let low = ((d as u16) << 4) | r as u16;
+            let (rd, rr) = (d + 16, r + 16);
+            assert_eq!(
+                decode(0x0308 | low),
+                Instruction::Fmul { rd, rr },
+                "FMUL R{rd},R{rr}"
+            );
+            assert_eq!(
+                decode(0x0380 | low),
+                Instruction::Fmuls { rd, rr },
+                "FMULS R{rd},R{rr}"
+            );
+            assert_eq!(
+                decode(0x0388 | low),
+                Instruction::Fmulsu { rd, rr },
+                "FMULSU R{rd},R{rr}"
+            );
+        }
+    }
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -3333,4 +3375,228 @@ fn test_execute_set_then_bld() {
     step_n(&mut cpu, 2);
     assert_eq!(cpu.registers[16], 0x20);
     assert_eq!(cpu.sreg, FLAG_BIT_COPY);
+}
+
+#[test]
+fn test_decode_fmul_family_neighbours() {
+    // MULSU (bits 7 and 3 off), MULS, CPC, MOVW : none is an FMUL variant
+    for word in [0x0300, 0x0301, 0x0307, 0x0370, 0x0200, 0x0400, 0x0100] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Fmul { .. } | Instruction::Fmuls { .. } | Instruction::Fmulsu { .. }
+            ),
+            "{word:#06X} must not decode as FMUL, FMULS or FMULSU"
+        );
+    }
+    // MULSU keeps 0x0300
+    assert!(matches!(decode(0x0300), Instruction::Mulsu { .. }));
+    // the three variants do not decode as each other
+    assert!(!matches!(
+        decode(0x0308),
+        Instruction::Fmuls { .. } | Instruction::Fmulsu { .. }
+    ));
+    assert!(!matches!(
+        decode(0x0380),
+        Instruction::Fmul { .. } | Instruction::Fmulsu { .. }
+    ));
+    assert!(!matches!(
+        decode(0x0388),
+        Instruction::Fmul { .. } | Instruction::Fmuls { .. }
+    ));
+}
+
+#[test]
+fn test_execute_fmul_one_times_one() {
+    // FMUL R16,R16 with 0x80 (1.0) : 0x4000 << 1 = 0x8000, no flag
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0308]);
+    cpu.registers[16] = 0x80;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[1], 0x80);
+    assert_eq!(cpu.registers[0], 0x00);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_fmul_max() {
+    // FMUL R16,R17 with 0xFF x 0xFF : 0xFE01 << 1 = 0xFC02, C
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0309]);
+    cpu.registers[16] = 0xFF;
+    cpu.registers[17] = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[1], 0xFC);
+    assert_eq!(cpu.registers[0], 0x02);
+    assert_eq!(cpu.sreg, FLAG_CARRY);
+}
+
+#[test]
+fn test_execute_fmul_zero() {
+    // FMUL R16,R17 with 0 x 0x80 : Z
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0309]);
+    cpu.registers[16] = 0x00;
+    cpu.registers[17] = 0x80;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[1], 0x00);
+    assert_eq!(cpu.registers[0], 0x00);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_fmul_half_times_half() {
+    // FMUL R16,R16 with 0x40 (0.5) : 0x1000 << 1 = 0x2000 (0.25 in 1.15)
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0308]);
+    cpu.registers[16] = 0x40;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[1], 0x20);
+    assert_eq!(cpu.registers[0], 0x00);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_fmul_keeps_operands() {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0309]);
+    cpu.registers[16] = 0xFF;
+    cpu.registers[17] = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[16], 0xFF);
+    assert_eq!(cpu.registers[17], 0xFF);
+}
+
+#[test]
+fn test_execute_fmuls_minus_one_times_minus_one() {
+    // FMULS R16,R16 with 0x80 : (-128)*(-128) = 0x4000, << 1 = 0x8000, no flag
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0380]);
+    cpu.registers[16] = 0x80;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[1], 0x80);
+    assert_eq!(cpu.registers[0], 0x00);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_fmuls_negative() {
+    // FMULS R16,R17 with 0x80 x 0x01 : product 0xFF80, result 0xFF00, C
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0381]);
+    cpu.registers[16] = 0x80;
+    cpu.registers[17] = 0x01;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[1], 0xFF);
+    assert_eq!(cpu.registers[0], 0x00);
+    assert_eq!(cpu.sreg, FLAG_CARRY);
+}
+
+#[test]
+fn test_execute_fmuls_positive() {
+    // FMULS R16,R17 with 0x40 x 0x40 : 0x1000 << 1 = 0x2000, no flag
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0381]);
+    cpu.registers[16] = 0x40;
+    cpu.registers[17] = 0x40;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[1], 0x20);
+    assert_eq!(cpu.registers[0], 0x00);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_fmuls_zero() {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0381]);
+    cpu.registers[16] = 0x00;
+    cpu.registers[17] = 0x80;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[1], 0x00);
+    assert_eq!(cpu.registers[0], 0x00);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_fmulsu_negative_times_unsigned() {
+    // FMULSU R16,R17 with 0x80 (signed) x 0xFF (unsigned) :
+    // -128 * 255 = 0x8080, << 1 = 0x0100, C
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0389]);
+    cpu.registers[16] = 0x80;
+    cpu.registers[17] = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[1], 0x01);
+    assert_eq!(cpu.registers[0], 0x00);
+    assert_eq!(cpu.sreg, FLAG_CARRY);
+}
+
+#[test]
+fn test_execute_fmulsu_rr_is_unsigned() {
+    // FMULSU R16,R17 with 0x01 x 0xFF : 255 (not -1), << 1 = 0x01FE, no flag
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0389]);
+    cpu.registers[16] = 0x01;
+    cpu.registers[17] = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[1], 0x01);
+    assert_eq!(cpu.registers[0], 0xFE);
+    assert_eq!(cpu.sreg, 0);
+}
+
+#[test]
+fn test_execute_fmulsu_zero() {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0389]);
+    cpu.registers[16] = 0x00;
+    cpu.registers[17] = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[1], 0x00);
+    assert_eq!(cpu.registers[0], 0x00);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+}
+
+#[test]
+fn test_execute_fmul_family_keep_n_v_s_h_t_i() {
+    // sreg = 0xFF : only C and Z are recalculated
+    // FMUL 0x80 x 0x80 : C off, Z off -> 0xFC
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0308]);
+    cpu.registers[16] = 0x80;
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xFC);
+
+    // FMUL 0xFF x 0xFF : C on, Z off -> 0xFD
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0308]);
+    cpu.registers[16] = 0xFF;
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xFD);
+
+    // FMULS 0 x 0 : C off, Z on -> 0xFE
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0380]);
+    cpu.registers[16] = 0x00;
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xFE);
+
+    // FMULSU 0x80 x 0x80 on R16,R16 : -128*128 = 0xC000, C on, Z off -> 0xFD
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0388]);
+    cpu.registers[16] = 0x80;
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xFD);
+}
+
+#[test]
+fn test_execute_fmul_family_do_not_touch_pc_beyond_one_word() {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x0308, 0x0380, 0x0388]);
+    cpu.registers[16] = 0x40;
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.pc, 3);
 }
