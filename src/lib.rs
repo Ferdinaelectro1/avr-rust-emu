@@ -34,6 +34,8 @@ enum Instruction {
     Asr { rd: u8 },
     Ror { rd: u8 },
     Swap { rd: u8 },
+    Adiw { rd: u8, k: u8 },
+    Sbiw { rd: u8, k: u8 },
     Unknown(u16),
 }
 
@@ -132,6 +134,14 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFE0F == 0x9405 => Instruction::Asr { rd: decode_dest(w) },
         w if w & 0xFE0F == 0x9407 => Instruction::Ror { rd: decode_dest(w) },
         w if w & 0xFE0F == 0x9402 => Instruction::Swap { rd: decode_dest(w) },
+        w if w & 0xFF00 == 0x9600 => Instruction::Adiw {
+            rd: 24 + 2 * ((w >> 4) & 0x0003) as u8,
+            k: (((w >> 2) & 0x0030) | (w & 0x000F)) as u8,
+        },
+        w if w & 0xFF00 == 0x9700 => Instruction::Sbiw {
+            rd: 24 + 2 * ((w >> 4) & 0x0003) as u8,
+            k: (((w >> 2) & 0x0030) | (w & 0x000F)) as u8,
+        },
         _ => Instruction::Unknown(word),
     }
 }
@@ -439,6 +449,26 @@ impl Cpu {
                     | ((self.registers[rd as usize] << 4) & 0xF0);
                 Ok(())
             }
+            Instruction::Adiw { rd, k } => {
+                let rdh = self.registers[(rd + 1) as usize] as u16;
+                let rdl = self.registers[rd as usize] as u16;
+                let rdw = (rdh << 8) | rdl;
+                let res = rdw.wrapping_add(k as u16);
+                self.registers[(rd + 1) as usize] = ((res >> 8) & 0x00FF) as u8;
+                self.registers[rd as usize] = (res & 0x00FF) as u8;
+                self.update_flags_word(rdw, res, true);
+                Ok(())
+            }
+            Instruction::Sbiw { rd, k } => {
+                let rdh = self.registers[(rd + 1) as usize] as u16;
+                let rdl = self.registers[rd as usize] as u16;
+                let rdw = (rdh << 8) | rdl;
+                let res = rdw.wrapping_sub(k as u16);
+                self.registers[(rd + 1) as usize] = ((res >> 8) & 0x00FF) as u8;
+                self.registers[rd as usize] = (res & 0x00FF) as u8;
+                self.update_flags_word(rdw, res, false);
+                Ok(())
+            }
         }
     }
 
@@ -589,6 +619,34 @@ impl Cpu {
         let carry_on = self.sreg & FLAG_CARRY != 0;
         if negative_on != carry_on {
             self.sreg |= FLAG_OVERFLOW;
+        }
+    }
+
+    fn update_flags_word(&mut self, old: u16, res: u16, is_add: bool) {
+        self.sreg &= FLAG_INTERRUPT_ENABLE | FLAG_BIT_COPY | FLAG_HALF_CARRY;
+        if res == 0 {
+            self.sreg |= FLAG_ZERO;
+        }
+        if res & 0x8000 != 0 {
+            self.sreg |= FLAG_NEGATIVE;
+        }
+        if is_add {
+            if (old & 0x8000 == 0) && (res & 0x8000 != 0) {
+                self.sreg |= FLAG_OVERFLOW;
+            }
+            if (old & 0x8000 != 0) && (res & 0x8000 == 0) {
+                self.sreg |= FLAG_CARRY;
+            }
+        } else {
+            if (old & 0x8000 != 0) && (res & 0x8000 == 0) {
+                self.sreg |= FLAG_OVERFLOW;
+            }
+            if (old & 0x8000 == 0) && (res & 0x8000 != 0) {
+                self.sreg |= FLAG_CARRY;
+            }
+        }
+        if ((self.sreg & FLAG_NEGATIVE) != 0) != ((self.sreg & FLAG_OVERFLOW) != 0) {
+            self.sreg |= FLAG_SIGN;
         }
     }
 

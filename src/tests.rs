@@ -355,6 +355,27 @@ fn test_decode_swap() {
     assert_eq!(decode(0x95F2), Instruction::Swap { rd: 31 });
 }
 
+//ADIW rd, k
+//SBIW rd, k
+#[test]
+fn test_decode_adiw_sbiw() {
+    // the four register pairs, K = 1
+    assert_eq!(decode(0x9601), Instruction::Adiw { rd: 24, k: 1 });
+    assert_eq!(decode(0x9611), Instruction::Adiw { rd: 26, k: 1 });
+    assert_eq!(decode(0x9621), Instruction::Adiw { rd: 28, k: 1 });
+    assert_eq!(decode(0x9631), Instruction::Adiw { rd: 30, k: 1 });
+    // constants : 0, 63 and 42 (both halves non-zero, different)
+    assert_eq!(decode(0x9600), Instruction::Adiw { rd: 24, k: 0 });
+    assert_eq!(decode(0x96CF), Instruction::Adiw { rd: 24, k: 63 });
+    assert_eq!(decode(0x96FF), Instruction::Adiw { rd: 30, k: 63 });
+    assert_eq!(decode(0x968A), Instruction::Adiw { rd: 24, k: 42 });
+    // SBIW
+    assert_eq!(decode(0x9701), Instruction::Sbiw { rd: 24, k: 1 });
+    assert_eq!(decode(0x9731), Instruction::Sbiw { rd: 30, k: 1 });
+    assert_eq!(decode(0x97FF), Instruction::Sbiw { rd: 30, k: 63 });
+    assert_eq!(decode(0x978A), Instruction::Sbiw { rd: 24, k: 42 });
+}
+
 //Unknown
 #[test]
 fn test_decode_unknown() {
@@ -2349,4 +2370,204 @@ fn test_execute_swap_keeps_all_flags() {
     // every flag off before : still off
     let cpu = run_unary(0xEA0B, 0x9502, 0x00);
     assert_eq!(cpu.sreg, 0x00);
+}
+
+// Loads a program and runs one step per word (no jumps).
+fn run_words(program: &[u16]) -> Cpu {
+    let mut cpu = Cpu::new();
+    cpu.load_program(program);
+    step_n(&mut cpu, program.len());
+    cpu
+}
+
+// Reads the 16-bit value held by registers lo+1 (high byte) and lo (low byte).
+fn reg_pair(cpu: &Cpu, lo: usize) -> u16 {
+    ((cpu.registers[lo + 1] as u16) << 8) | cpu.registers[lo] as u16
+}
+
+#[test]
+fn test_decode_adiw_sbiw_neighbours() {
+    // COM, RET, the 0x95xx group, CBI, MUL and 0x9400 are not ADIW or SBIW
+    for word in [0x9400, 0x9500, 0x9508, 0x95FF, 0x9800, 0x9C00] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Adiw { .. } | Instruction::Sbiw { .. }
+            ),
+            "{word:#06X} must not decode as ADIW or SBIW"
+        );
+    }
+    // ADIW and SBIW do not decode as each other
+    assert!(!matches!(decode(0x9601), Instruction::Sbiw { .. }));
+    assert!(!matches!(decode(0x9701), Instruction::Adiw { .. }));
+    // the single-register group is still decoded
+    assert_eq!(decode(0x9503), Instruction::Inc { rd: 16 });
+}
+
+#[test]
+fn test_execute_adiw() {
+    // LDI R24, x : 0xE085 (5), 0xEF8F (0xFF), 0xE080 (0), 0xE384 (0x34)
+    // LDI R25, x : 0xE090 (0), 0xE091 (1), 0xE79F (0x7F), 0xE890 (0x80), 0xEF9F (0xFF), 0xE192 (0x12)
+    // ADIW R24, 1 = 0x9601 ; ADIW R24, 0 = 0x9600 ; ADIW R24, 63 = 0x96CF ; ADIW R24, 42 = 0x968A
+    let cases: &[(&[u16], u16, u8, &str)] = &[
+        (&[0xE085, 0xE090, 0x9601], 0x0006, 0, "0x0005 + 1"),
+        // the carry goes from the low byte to the high byte
+        (&[0xEF8F, 0xE090, 0x9601], 0x0100, 0, "0x00FF + 1"),
+        // non-zero high byte : catches a bad 16-bit assembly
+        (&[0xE080, 0xE091, 0x9601], 0x0101, 0, "0x0100 + 1"),
+        // all four nibbles are different
+        (&[0xE384, 0xE192, 0x968A], 0x125E, 0, "0x1234 + 42"),
+        (
+            &[0xEF8F, 0xEF9F, 0x9601],
+            0x0000,
+            FLAG_CARRY | FLAG_ZERO,
+            "0xFFFF + 1",
+        ),
+        // N and V together, so S is off
+        (
+            &[0xEF8F, 0xE79F, 0x9601],
+            0x8000,
+            FLAG_NEGATIVE | FLAG_OVERFLOW,
+            "0x7FFF + 1",
+        ),
+        // V must not mean "result == 0x8000"
+        (
+            &[0xEF8F, 0xE79F, 0x96CF],
+            0x803E,
+            FLAG_NEGATIVE | FLAG_OVERFLOW,
+            "0x7FFF + 63",
+        ),
+        (
+            &[0xE080, 0xE890, 0x9601],
+            0x8001,
+            FLAG_NEGATIVE | FLAG_SIGN,
+            "0x8000 + 1",
+        ),
+        (&[0xE080, 0xE090, 0x9600], 0x0000, FLAG_ZERO, "0x0000 + 0"),
+        (&[0xEF8F, 0xEF9F, 0x96CF], 0x003E, FLAG_CARRY, "0xFFFF + 63"),
+        (&[0xE080, 0xE090, 0x968A], 0x002A, 0, "0x0000 + 42"),
+    ];
+    for (program, expected, flags, label) in cases {
+        let cpu = run_words(program);
+        assert_eq!(reg_pair(&cpu, 24), *expected, "{label} : value");
+        assert_eq!(cpu.sreg, *flags, "{label} : sreg");
+    }
+}
+
+#[test]
+fn test_execute_sbiw() {
+    // SBIW R24, 1 = 0x9701 ; SBIW R24, 0 = 0x9700 ; SBIW R24, 63 = 0x97CF ; SBIW R24, 42 = 0x978A
+    // LDI R24, x : 0xE086 (6), 0xE081 (1), 0xE180 (0x10)
+    let cases: &[(&[u16], u16, u8, &str)] = &[
+        (&[0xE086, 0xE090, 0x9701], 0x0005, 0, "0x0006 - 1"),
+        // the borrow comes from the high byte
+        (&[0xE080, 0xE091, 0x9701], 0x00FF, 0, "0x0100 - 1"),
+        // low byte is 0 but the whole value is not : Z must stay off
+        (&[0xE081, 0xE091, 0x9701], 0x0100, 0, "0x0101 - 1"),
+        (&[0xE384, 0xE192, 0x978A], 0x120A, 0, "0x1234 - 42"),
+        (&[0xE081, 0xE090, 0x9701], 0x0000, FLAG_ZERO, "0x0001 - 1"),
+        (
+            &[0xE080, 0xE090, 0x9701],
+            0xFFFF,
+            FLAG_CARRY | FLAG_NEGATIVE | FLAG_SIGN,
+            "0x0000 - 1",
+        ),
+        (
+            &[0xE080, 0xE890, 0x9701],
+            0x7FFF,
+            FLAG_OVERFLOW | FLAG_SIGN,
+            "0x8000 - 1",
+        ),
+        // V must not mean "result == 0x7FFF"
+        (
+            &[0xE080, 0xE890, 0x97CF],
+            0x7FC1,
+            FLAG_OVERFLOW | FLAG_SIGN,
+            "0x8000 - 63",
+        ),
+        (
+            &[0xE081, 0xE890, 0x9701],
+            0x8000,
+            FLAG_NEGATIVE | FLAG_SIGN,
+            "0x8001 - 1",
+        ),
+        (
+            &[0xE180, 0xE090, 0x97CF],
+            0xFFD1,
+            FLAG_CARRY | FLAG_NEGATIVE | FLAG_SIGN,
+            "0x0010 - 63",
+        ),
+        (&[0xE080, 0xE090, 0x9700], 0x0000, FLAG_ZERO, "0x0000 - 0"),
+    ];
+    for (program, expected, flags, label) in cases {
+        let cpu = run_words(program);
+        assert_eq!(reg_pair(&cpu, 24), *expected, "{label} : value");
+        assert_eq!(cpu.sreg, *flags, "{label} : sreg");
+    }
+}
+
+#[test]
+fn test_execute_adiw_other_pairs() {
+    // R27:R26 (X) : 0x00FF + 1
+    let cpu = run_words(&[0xEFAF, 0xE0B0, 0x9611]);
+    assert_eq!(reg_pair(&cpu, 26), 0x0100);
+    // R29:R28 (Y)
+    let cpu = run_words(&[0xEFCF, 0xE0D0, 0x9621]);
+    assert_eq!(reg_pair(&cpu, 28), 0x0100);
+    // R31:R30 (Z) ; R25:R24 must not move : LDI R24, 0x55 first
+    let cpu = run_words(&[0xE585, 0xEFEF, 0xE0F0, 0x9631]);
+    assert_eq!(reg_pair(&cpu, 30), 0x0100);
+    assert_eq!(cpu.registers[24], 0x55);
+    assert_eq!(cpu.registers[25], 0x00);
+}
+
+#[test]
+fn test_execute_sbiw_other_pairs() {
+    // R27:R26 (X) : 0x0100 - 1
+    let cpu = run_words(&[0xE0A0, 0xE0B1, 0x9711]);
+    assert_eq!(reg_pair(&cpu, 26), 0x00FF);
+    // R29:R28 (Y)
+    let cpu = run_words(&[0xE0C0, 0xE0D1, 0x9721]);
+    assert_eq!(reg_pair(&cpu, 28), 0x00FF);
+    // R31:R30 (Z) : 0 - 63
+    let cpu = run_words(&[0xE0E0, 0xE0F0, 0x97FF]);
+    assert_eq!(reg_pair(&cpu, 30), 0xFFC1);
+    assert_eq!(cpu.sreg, FLAG_CARRY | FLAG_NEGATIVE | FLAG_SIGN);
+}
+
+#[test]
+fn test_execute_sbiw_delay_loop() {
+    // LDI R24, 3 / LDI R25, 0 / SBIW R24, 1 / BRNE -2
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE083, 0xE090, 0x9701, 0xF7F1]);
+    step_n(&mut cpu, 8);
+    assert_eq!(reg_pair(&cpu, 24), 0);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+    assert_eq!(cpu.pc, 4);
+}
+
+#[test]
+fn test_execute_sbiw_delay_loop_crosses_byte() {
+    // 0x0101 : the low byte reaches 0 at 0x0100, the loop must go on
+    // until the whole 16-bit value is 0 : 257 turns of 2 steps + 2 LDI
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE081, 0xE091, 0x9701, 0xF7F1]);
+    step_n(&mut cpu, 516);
+    assert_eq!(reg_pair(&cpu, 24), 0);
+    assert_eq!(cpu.sreg, FLAG_ZERO);
+    assert_eq!(cpu.pc, 4);
+}
+
+#[test]
+fn test_execute_adiw_sbiw_flag_preservation() {
+    // ADIW R24, 1 on 0x0005, then SBIW R24, 1 on 0x0006 : result without flags.
+    // every flag on before : I, T, H kept ; C, Z, N, V, S recomputed (all off)
+    for program in [[0xE085, 0xE090, 0x9601], [0xE086, 0xE090, 0x9701]] {
+        let mut cpu = Cpu::new();
+        cpu.load_program(&program);
+        step_n(&mut cpu, 2);
+        cpu.sreg = 0xFF;
+        step_n(&mut cpu, 1);
+        assert_eq!(cpu.sreg, 0xE0);
+    }
 }
