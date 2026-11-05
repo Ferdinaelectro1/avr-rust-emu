@@ -49,6 +49,8 @@ enum Instruction {
     Fmulsu { rd: u8, rr: u8 },
     In { rd: u8, a: u8 },
     Out { a: u8, rr: u8 },
+    Push { rr: u8 },
+    Pop { rd: u8 },
     Unknown(u16),
 }
 
@@ -205,6 +207,8 @@ fn decode(word: u16) -> Instruction {
             a: (((w >> 5) & 0x0030) | (w & 0x000F)) as u8,
             rr: ((w >> 4) & 0x001F) as u8,
         },
+        w if w & 0xFE0F == 0x920F => Instruction::Push { rr: decode_dest(w) },
+        w if w & 0xFE0F == 0x900F => Instruction::Pop { rd: decode_dest(w) },
         _ => Instruction::Unknown(word),
     }
 }
@@ -620,6 +624,16 @@ impl Cpu {
             }
             Instruction::In { rd, a } => {
                 self.registers[rd as usize] = self.read_data(a as u16 + IO_START)?;
+                Ok(())
+            }
+            Instruction::Pop { rd } => {
+                self.sp = self.sp.wrapping_add(1);
+                self.registers[rd as usize] = self.read_data(self.sp)?;
+                Ok(())
+            }
+            Instruction::Push { rr } => {
+                self.write_data(self.sp, self.registers[rr as usize])?;
+                self.sp = self.sp.wrapping_sub(1);
                 Ok(())
             }
         }

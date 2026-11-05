@@ -3741,3 +3741,156 @@ fn test_execute_in_out_keep_flags() {
     step_n(&mut cpu, 2);
     assert_eq!(cpu.sreg, 0xFF);
 }
+
+#[test]
+fn test_decode_push_pop() {
+    // PUSH R0 / R16 / R28 / R31
+    assert_eq!(decode(0x920F), Instruction::Push { rr: 0 });
+    assert_eq!(decode(0x930F), Instruction::Push { rr: 16 });
+    assert_eq!(decode(0x93CF), Instruction::Push { rr: 28 });
+    assert_eq!(decode(0x93FF), Instruction::Push { rr: 31 });
+    // POP R0 / R16 / R29 / R31
+    assert_eq!(decode(0x900F), Instruction::Pop { rd: 0 });
+    assert_eq!(decode(0x910F), Instruction::Pop { rd: 16 });
+    assert_eq!(decode(0x91DF), Instruction::Pop { rd: 29 });
+    assert_eq!(decode(0x91FF), Instruction::Pop { rd: 31 });
+}
+
+#[test]
+fn test_decode_push_pop_all_registers() {
+    // the word is built from r, like the BST/BLD test
+    for r in 0u8..32 {
+        let low = (r as u16) << 4;
+        assert_eq!(
+            decode(0x920F | low),
+            Instruction::Push { rr: r },
+            "PUSH R{r}"
+        );
+        assert_eq!(decode(0x900F | low), Instruction::Pop { rd: r }, "POP R{r}");
+    }
+}
+
+#[test]
+fn test_decode_push_pop_neighbours() {
+    // STS, LDS, LD Rd,Z+ , LD Rd,-X, ST -X : same group, other low nibble
+    for word in [
+        0x9200, 0x9000, 0x9001, 0x900E, 0x920E, 0x9010, 0x9100, 0x910E,
+    ] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Push { .. } | Instruction::Pop { .. }
+            ),
+            "{word:#06X} must not decode as PUSH or POP"
+        );
+    }
+    // PUSH and POP do not decode as each other
+    assert!(!matches!(decode(0x930F), Instruction::Pop { .. }));
+    assert!(!matches!(decode(0x910F), Instruction::Push { .. }));
+}
+
+#[test]
+fn test_execute_push() {
+    // LDI R16, 0x55 / PUSH R16 with sp = 0x08FF
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE505, 0x930F]);
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.sram[0x08FF - 0x100], 0x55);
+    assert_eq!(cpu.sp, 0x08FE);
+    assert_eq!(cpu.registers[16], 0x55);
+}
+
+#[test]
+fn test_execute_pop() {
+    // POP R17 with sp = 0x08FE and a byte at 0x08FF
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x911F]);
+    cpu.sp = 0x08FE;
+    cpu.sram[0x08FF - 0x100] = 0x77;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[17], 0x77);
+    assert_eq!(cpu.sp, 0x08FF);
+}
+
+#[test]
+fn test_execute_push_then_pop_round_trip() {
+    // LDI R16, 0x55 / PUSH R16 / POP R17
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE505, 0x930F, 0x911F]);
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.registers[17], 0x55);
+    assert_eq!(cpu.registers[16], 0x55);
+    assert_eq!(cpu.sp, 0x08FF);
+}
+
+#[test]
+fn test_execute_push_pop_lifo_order() {
+    // LDI R16,0x55 / LDI R17,0x66 / PUSH R16 / PUSH R17 / POP R18 / POP R19
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE505, 0xE616, 0x930F, 0x931F, 0x912F, 0x913F]);
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 4);
+    assert_eq!(cpu.sp, 0x08FD);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[18], 0x66);
+    assert_eq!(cpu.registers[19], 0x55);
+    assert_eq!(cpu.sp, 0x08FF);
+}
+
+#[test]
+fn test_execute_push_pop_extreme_registers() {
+    // PUSH R31 / POP R0
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x93FF, 0x900F]);
+    cpu.sp = 0x08FF;
+    cpu.registers[31] = 0xAB;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[0], 0xAB);
+    assert_eq!(cpu.registers[31], 0xAB);
+}
+
+#[test]
+fn test_execute_push_pop_keep_flags() {
+    // PUSH R16 / POP R17 never touch sreg
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x930F, 0x911F]);
+    cpu.sp = 0x08FF;
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.sreg, 0xFF);
+}
+
+#[test]
+fn test_execute_push_then_in_spl() {
+    // PUSH R16 / IN R17, 0x3D (SPL) : the new sp is visible through IN
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x930F, 0xB71D]);
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[17], 0xFE);
+}
+
+#[test]
+fn test_execute_push_with_sp_zero_wraps() {
+    // sp = 0 : the byte lands in R0 (real hardware behaviour), sp wraps to 0xFFFF
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x930F]);
+    cpu.registers[16] = 0x42;
+    cpu.sp = 0;
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.registers[0], 0x42);
+    assert_eq!(cpu.sp, 0xFFFF);
+}
+
+#[test]
+fn test_execute_pop_beyond_ramend_is_an_error() {
+    // sp = 0x08FF : POP reads at 0x0900, past RAMEND
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x910F]);
+    cpu.registers[16] = 0x99;
+    cpu.sp = 0x08FF;
+    assert!(cpu.step().is_err());
+    assert_eq!(cpu.registers[16], 0x99);
+}
