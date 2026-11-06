@@ -6,7 +6,7 @@ use std::{format, println};
 use crate::constants::*;
 
 #[derive(Debug, PartialEq)]
-enum Instruction {
+pub enum Instruction {
     Nop,
     Ldi { dest: u8, k: u8 },
     Add { dest: u8, src: u8 },
@@ -87,7 +87,7 @@ pub enum Pointer { X, Y, Z }
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Mode { Direct, PostInc, PreDec }
 
-fn decode(word: u16) -> Instruction {
+pub fn decode(word: u16) -> Instruction {
     match word {
         0x0000 => Instruction::Nop,
         w if w & 0xF000 == 0xE000 => {
@@ -423,7 +423,7 @@ fn sign_extend(value: u16, bits: u32) -> i16 {
 }
 
 pub struct Cpu {
-    flash: [u16; FLASH_SIZE],
+    pub flash: [u16; FLASH_SIZE],
     sram: [u8; SRAM_SIZE],
     registers: [u8; CPU_REGISTERS_SIZE],
     pc: u16,
