@@ -4244,3 +4244,198 @@ fn test_execute_function_call_integration() {
     assert_eq!(cpu.sp, 0x08FF);
     assert_eq!(cpu.pc, 6);
 }
+
+#[test]
+fn test_decode_jmp_call_family() {
+    assert_eq!(decode(0x940C), Instruction::Jmp);
+    assert_eq!(decode(0x940E), Instruction::Call);
+    assert_eq!(decode(0x9409), Instruction::Ijmp);
+    assert_eq!(decode(0x9509), Instruction::Icall);
+    assert_eq!(decode(0x9518), Instruction::Reti);
+    // the high address bits of the first word are ignored
+    assert_eq!(decode(0x940D), Instruction::Jmp);
+    assert_eq!(decode(0x95FD), Instruction::Jmp);
+    assert_eq!(decode(0x95FE), Instruction::Call);
+}
+
+#[test]
+fn test_decode_jmp_call_family_neighbours() {
+    // BSET, DEC, DES, RET, EIJMP, EICALL, ROR
+    for word in [0x9408, 0x940A, 0x940B, 0x9508, 0x9419, 0x9519, 0x9507] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Jmp
+                    | Instruction::Call
+                    | Instruction::Ijmp
+                    | Instruction::Icall
+                    | Instruction::Reti
+            ),
+            "{word:#06X} must not decode as a jump or call"
+        );
+    }
+    // RET and RETI are different words
+    assert!(!matches!(decode(0x9508), Instruction::Reti));
+    assert!(!matches!(decode(0x9518), Instruction::Ret));
+}
+
+#[test]
+fn test_execute_jmp() {
+    // JMP 3 / LDI R16,10 (skipped) / LDI R17,11
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x940C, 0x0003, 0xE00A, 0xE01B]);
+    cpu.sp = 0x08FF;
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.pc, 4);
+    assert_eq!(cpu.registers[16], 0);
+    assert_eq!(cpu.registers[17], 11);
+    assert_eq!(cpu.sp, 0x08FF);
+    assert_eq!(cpu.sreg, 0xFF);
+}
+
+#[test]
+fn test_execute_jmp_is_absolute() {
+    // JMP 0 at pc = 5 : lands on 0, not on 5 + 0
+    let mut cpu = Cpu::new();
+    cpu.flash[5] = 0x940C;
+    cpu.flash[6] = 0x0000;
+    cpu.pc = 5;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.pc, 0);
+}
+
+#[test]
+fn test_execute_jmp_second_word_outside_flash_is_an_error() {
+    let mut cpu = Cpu::new();
+    cpu.flash[FLASH_SIZE - 1] = 0x940C;
+    cpu.pc = (FLASH_SIZE - 1) as u16;
+    assert!(cpu.step().is_err());
+}
+
+#[test]
+fn test_execute_call_pushes_return_address() {
+    // CALL 0x0200 at pc = 0x121 : return address 0x0123
+    let mut cpu = Cpu::new();
+    cpu.flash[0x121] = 0x940E;
+    cpu.flash[0x122] = 0x0200;
+    cpu.pc = 0x121;
+    cpu.sp = 0x08FF;
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sram[0x08FE - 0x100], 0x01);
+    assert_eq!(cpu.sram[0x08FF - 0x100], 0x23);
+    assert_eq!(cpu.sp, 0x08FD);
+    assert_eq!(cpu.pc, 0x0200);
+    assert_eq!(cpu.sreg, 0xFF);
+}
+
+#[test]
+fn test_execute_call_then_ret_round_trip() {
+    // 0: CALL 4 / 2: LDI R17,9 / 3: filler / 4: INC R16 / 5: RET
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x940E, 0x0004, 0xE019, 0x0000, 0x9503, 0x9508]);
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.pc, 2);
+    assert_eq!(cpu.sp, 0x08FF);
+    assert_eq!(cpu.registers[16], 1);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[17], 9);
+}
+
+#[test]
+fn test_execute_ijmp() {
+    // LDI R30,0x23 / LDI R31,0x01 / IJMP : Z = 0x0123
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE2E3, 0xE0F1, 0x9409]);
+    cpu.sp = 0x08FF;
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.pc, 0x0123);
+    assert_eq!(cpu.sp, 0x08FF);
+    assert_eq!(cpu.sreg, 0xFF);
+}
+
+#[test]
+fn test_execute_icall_pushes_pc_plus_one() {
+    // ICALL at pc = 0x122 with Z = 0x0200 : return address 0x0123
+    let mut cpu = Cpu::new();
+    cpu.flash[0x122] = 0x9509;
+    cpu.pc = 0x122;
+    cpu.registers[30] = 0x00;
+    cpu.registers[31] = 0x02;
+    cpu.sp = 0x08FF;
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sram[0x08FE - 0x100], 0x01);
+    assert_eq!(cpu.sram[0x08FF - 0x100], 0x23);
+    assert_eq!(cpu.sp, 0x08FD);
+    assert_eq!(cpu.pc, 0x0200);
+    assert_eq!(cpu.sreg, 0xFF);
+}
+
+#[test]
+fn test_execute_icall_then_ret() {
+    // 0: ICALL (Z = 3) / 1: LDI R17,9 / 2: filler / 3: RET
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9509, 0xE019, 0x0000, 0x9508]);
+    cpu.registers[30] = 3;
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.pc, 1);
+    assert_eq!(cpu.sp, 0x08FF);
+}
+
+#[test]
+fn test_execute_reti() {
+    // bytes prepared by hand : high 0x01 at 0x08FE, low 0x23 at 0x08FF
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9518]);
+    cpu.sp = 0x08FD;
+    cpu.sram[0x08FE - 0x100] = 0x01;
+    cpu.sram[0x08FF - 0x100] = 0x23;
+    cpu.sreg = 0x00;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.pc, 0x0123);
+    assert_eq!(cpu.sp, 0x08FF);
+    assert_eq!(cpu.sreg, FLAG_INTERRUPT_ENABLE);
+}
+
+#[test]
+fn test_execute_reti_keeps_other_flags() {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9518]);
+    cpu.sp = 0x08FD;
+    cpu.sreg = 0x7F;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xFF);
+}
+
+#[test]
+fn test_execute_reti_beyond_ramend_is_an_error() {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9518]);
+    cpu.sp = 0x08FF;
+    cpu.sreg = 0x00;
+    assert!(cpu.step().is_err());
+    assert_eq!(cpu.sreg, 0x00);
+}
+
+#[test]
+fn test_execute_avr_gcc_startup_integration() {
+    // 0: JMP 3 / 2: filler / 3: LDI R16,0xFF / 4: OUT 0x3D,R16
+    // 5: LDI R16,0x08 / 6: OUT 0x3E,R16 / 7: CALL 11 / 9: MOV R17,R16
+    // 10: filler / 11: INC R16 / 12: RET
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[
+        0x940C, 0x0003, 0x0000, 0xEF0F, 0xBF0D, 0xE008, 0xBF0E, 0x940E, 0x000B, 0x2F10, 0x0000,
+        0x9503, 0x9508,
+    ]);
+    step_n(&mut cpu, 8);
+    assert_eq!(cpu.registers[16], 9);
+    assert_eq!(cpu.sp, 0x08FF);
+    assert_eq!(cpu.pc, 9);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[17], 9);
+}

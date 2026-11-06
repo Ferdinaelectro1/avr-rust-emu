@@ -55,6 +55,11 @@ enum Instruction {
     Sts { rr: u8 },
     Rcall { k: i16 },
     Ret,
+    Jmp,
+    Call,
+    Ijmp,
+    Icall,
+    Reti,
     Unknown(u16),
 }
 
@@ -219,6 +224,11 @@ fn decode(word: u16) -> Instruction {
             k: sign_extend(w, 12),
         },
         w if w & 0xFFFF == 0x9508 => Instruction::Ret,
+        w if w & 0xFE0E == 0x940C => Instruction::Jmp,
+        w if w & 0xFE0E == 0x940E => Instruction::Call,
+        w if w & 0xFFFF == 0x9409 => Instruction::Ijmp,
+        w if w & 0xFFFF == 0x9509 => Instruction::Icall,
+        w if w & 0xFFFF == 0x9518 => Instruction::Reti,
         _ => Instruction::Unknown(word),
     }
 }
@@ -671,6 +681,46 @@ impl Cpu {
                 self.sp = self.sp.wrapping_add(1);
                 let pc_ret_l = self.read_data(self.sp)?;
                 self.pc = ((pc_ret_h as u16) << 8) | (pc_ret_l as u16);
+                Ok(())
+            }
+            Instruction::Jmp => {
+                let k = self.fetch()?;
+                self.pc = k;
+                Ok(())
+            }
+            Instruction::Ijmp => {
+                let z_l = self.registers[30];
+                let z_h = self.registers[31];
+                self.pc = ((z_h as u16) << 8) | (z_l as u16);
+                Ok(())
+            }
+            Instruction::Call => {
+                let dest = self.fetch()?;
+                let ret = self.pc;
+                self.write_data(self.sp, (ret & 0x00FF) as u8)?;
+                self.sp = self.sp.wrapping_sub(1);
+                self.write_data(self.sp, ((ret >> 8) & 0x00FF) as u8)?;
+                self.sp = self.sp.wrapping_sub(1);
+                self.pc = dest;
+                Ok(())
+            }
+            Instruction::Icall => {
+                let z_l = self.registers[30];
+                let z_h = self.registers[31];
+                self.write_data(self.sp, (self.pc & 0x00FF) as u8)?;
+                self.sp = self.sp.wrapping_sub(1);
+                self.write_data(self.sp, ((self.pc >> 8) & 0x00FF) as u8)?;
+                self.sp = self.sp.wrapping_sub(1);
+                self.pc = ((z_h as u16) << 8) | (z_l as u16);
+                Ok(())
+            }
+            Instruction::Reti => {
+                self.sp = self.sp.wrapping_add(1);
+                let pc_h = self.read_data(self.sp)?;
+                self.sp = self.sp.wrapping_add(1);
+                let pc_l = self.read_data(self.sp)?;
+                self.pc = ((pc_h as u16) << 8) | (pc_l as u16);
+                self.sreg |= FLAG_INTERRUPT_ENABLE;
                 Ok(())
             }
         }
