@@ -5334,3 +5334,66 @@ fn test_execute_sleep_wdr_break_in_a_row() {
     assert_eq!(cpu.pc, 3);
     assert_eq!(cpu.sreg, 0xFF);
 }
+
+// Words that must stay Unknown on the ATmega328P (reserved or absent encodings).
+fn expected_unknown(w: u16) -> bool {
+    let lo4 = w & 0x000F;
+    match w {
+        // only NOP (0x0000) exists below 0x0100
+        0x0000..=0x00FF => w != 0x0000,
+        // LD / LDS / LPM / POP group : 3, 6 and 7 (ELPM), 8 and B are unused
+        0x9000..=0x91FF => matches!(lo4, 0x3 | 0x6 | 0x7 | 0x8 | 0xB),
+        // ST / STS / PUSH group : 3, 4 (XCH), 5 (LAS), 6 (LAC), 7 (LAT), 8, B
+        0x9200..=0x93FF => matches!(lo4, 0x3 | 0x4 | 0x5 | 0x6 | 0x7 | 0x8 | 0xB),
+        // 0x94xx and 0x95xx
+        0x9400..=0x95FF => match lo4 {
+            0x4 | 0xB => true, // 0x9404 hole, DES
+            0x9 => w != 0x9409 && w != 0x9509, // only IJMP and ICALL (EIJMP, EICALL absent)
+            0x8 => {
+                // 0x94x8 is BSET/BCLR for every s, 0x95x8 is a mix
+                w >> 8 == 0x95
+                    && !matches!(w, 0x9508 | 0x9518 | 0x9588 | 0x9598 | 0x95A8 | 0x95C8)
+            }
+            _ => false,
+        },
+        // BLD, BST, SBRC, SBRS : bit 3 must be 0
+        0xF800..=0xFFFF => w & 0x0008 != 0,
+        _ => false,
+    }
+}
+
+#[test]
+fn test_decode_coverage_all_words() {
+    let mut unknown = 0u32;
+    for w in 0..=u16::MAX {
+        let is_unknown = matches!(decode(w), Instruction::Unknown(..));
+        assert_eq!(
+            is_unknown,
+            expected_unknown(w),
+            "{w:#06X} : decode says unknown = {is_unknown}, expected {}",
+            expected_unknown(w)
+        );
+        if is_unknown {
+            unknown += 1;
+        }
+    }
+    // 255 + 160 + 224 + 104 + 1024
+    assert_eq!(unknown, 1767);
+}
+
+#[test]
+fn test_execute_never_panics_on_any_word() {
+    // every word that decodes to a real instruction is run once on a cpu whose
+    // pointers and stack are in valid places ; errors are fine, panics are not
+    for w in 0..=u16::MAX {
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[w, 0x0000]);
+        cpu.sp = 0x08FF;
+        for r in [26, 28, 30] {
+            cpu.registers[r] = 0x00;
+            cpu.registers[r + 1] = 0x01;
+        }
+        cpu.sreg = 0xFF;
+        let _ = cpu.step();
+    }
+}
