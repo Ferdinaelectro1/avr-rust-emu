@@ -4844,3 +4844,321 @@ fn test_execute_wait_loop_integration() {
     assert_eq!(cpu.registers[18], 5);
     assert_eq!(cpu.pc, 3);
 }
+
+#[test]
+fn test_decode_ld_st_simple_forms() {
+    // (word, pointer, mode) for LD R16 and ST R16
+    let forms = [
+        (0x0C, Pointer::X, Mode::Direct),
+        (0x0D, Pointer::X, Mode::PostInc),
+        (0x0E, Pointer::X, Mode::PreDec),
+        (0x09, Pointer::Y, Mode::PostInc),
+        (0x0A, Pointer::Y, Mode::PreDec),
+        (0x01, Pointer::Z, Mode::PostInc),
+        (0x02, Pointer::Z, Mode::PreDec),
+    ];
+    for (low, pointer, mode) in forms {
+        assert_eq!(decode(0x9100 | low), Instruction::Ld { rd: 16, pointer, mode });
+        assert_eq!(decode(0x9300 | low), Instruction::St { rr: 16, pointer, mode });
+    }
+}
+
+#[test]
+fn test_decode_ld_st_all_registers() {
+    for r in 0u8..32 {
+        let low = (r as u16) << 4;
+        assert_eq!(
+            decode(0x900D | low),
+            Instruction::Ld { rd: r, pointer: Pointer::X, mode: Mode::PostInc },
+            "LD R{r},X+"
+        );
+        assert_eq!(
+            decode(0x920E | low),
+            Instruction::St { rr: r, pointer: Pointer::X, mode: Mode::PreDec },
+            "ST -X,R{r}"
+        );
+    }
+}
+
+#[test]
+fn test_decode_ldd_std_known_words() {
+    assert_eq!(decode(0x8108), Instruction::Ldd { rd: 16, pointer: Pointer::Y, q: 0 });
+    assert_eq!(decode(0x8109), Instruction::Ldd { rd: 16, pointer: Pointer::Y, q: 1 });
+    assert_eq!(decode(0x8101), Instruction::Ldd { rd: 16, pointer: Pointer::Z, q: 1 });
+    assert_eq!(decode(0xAD0F), Instruction::Ldd { rd: 16, pointer: Pointer::Y, q: 63 });
+    assert_eq!(decode(0xAD07), Instruction::Ldd { rd: 16, pointer: Pointer::Z, q: 63 });
+    assert_eq!(decode(0x8309), Instruction::Std { rr: 16, pointer: Pointer::Y, q: 1 });
+    assert_eq!(decode(0x8301), Instruction::Std { rr: 16, pointer: Pointer::Z, q: 1 });
+    assert_eq!(decode(0xAF0F), Instruction::Std { rr: 16, pointer: Pointer::Y, q: 63 });
+    assert_eq!(decode(0xAF07), Instruction::Std { rr: 16, pointer: Pointer::Z, q: 63 });
+}
+
+#[test]
+fn test_decode_ldd_std_all_q() {
+    // the word is built from q : bits 5 / 4-3 / 2-0 go to bit 13 / 11-10 / 2-0
+    for q in 0u8..64 {
+        let q16 = q as u16;
+        let bits = ((q16 & 0x20) << 8) | ((q16 & 0x18) << 7) | (q16 & 0x07);
+        assert_eq!(decode(0x8100 | bits), Instruction::Ldd { rd: 16, pointer: Pointer::Z, q }, "LDD Z+{q}");
+        assert_eq!(decode(0x8108 | bits), Instruction::Ldd { rd: 16, pointer: Pointer::Y, q }, "LDD Y+{q}");
+        assert_eq!(decode(0x8300 | bits), Instruction::Std { rr: 16, pointer: Pointer::Z, q }, "STD Z+{q}");
+        assert_eq!(decode(0x8308 | bits), Instruction::Std { rr: 16, pointer: Pointer::Y, q }, "STD Y+{q}");
+    }
+}
+
+#[test]
+fn test_decode_ld_st_neighbours() {
+    // LDS, STS, POP, PUSH, LPM, ELPM, unused nibbles, IN, RJMP
+    for word in [
+        0x9000, 0x9200, 0x900F, 0x920F, 0x9004, 0x9005, 0x9006, 0x9003, 0x9008, 0x900B, 0xB000, 0xC000,
+    ] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Ld { .. } | Instruction::St { .. } | Instruction::Ldd { .. } | Instruction::Std { .. }
+            ),
+            "{word:#06X} must not decode as LD, ST, LDD or STD"
+        );
+    }
+}
+
+fn run_ptr(program: &[u16], setup: impl FnOnce(&mut Cpu)) -> Cpu {
+    let mut cpu = Cpu::new();
+    cpu.load_program(program);
+    setup(&mut cpu);
+    step_n(&mut cpu, 1);
+    cpu
+}
+
+#[test]
+fn test_execute_ld_x_modes() {
+    // LD R16, X  (X = 0x0100)
+    let cpu = run_ptr(&[0x910C], |c| {
+        c.registers[26] = 0x00;
+        c.registers[27] = 0x01;
+        c.sram[0] = 0x5A;
+    });
+    assert_eq!(cpu.registers[16], 0x5A);
+    assert_eq!((cpu.registers[27], cpu.registers[26]), (0x01, 0x00));
+
+    // LD R16, X+ : pointer incremented after
+    let cpu = run_ptr(&[0x910D], |c| {
+        c.registers[27] = 0x01;
+        c.sram[0] = 0x5A;
+    });
+    assert_eq!(cpu.registers[16], 0x5A);
+    assert_eq!((cpu.registers[27], cpu.registers[26]), (0x01, 0x01));
+
+    // LD R16, -X : pointer decremented first, X = 0x0101 -> reads 0x0100
+    let cpu = run_ptr(&[0x910E], |c| {
+        c.registers[26] = 0x01;
+        c.registers[27] = 0x01;
+        c.sram[0] = 0x5A;
+        c.sram[1] = 0x99;
+    });
+    assert_eq!(cpu.registers[16], 0x5A);
+    assert_eq!((cpu.registers[27], cpu.registers[26]), (0x01, 0x00));
+}
+
+#[test]
+fn test_execute_ld_y_z_modes() {
+    // LD R16, Y+ / -Y / Z+ / -Z, pointer starts at 0x0100 (0x0101 for the -modes)
+    for (word, base, start, end) in [
+        (0x9109u16, 28usize, 0x0100u16, 0x0101u16),
+        (0x910A, 28, 0x0101, 0x0100),
+        (0x9101, 30, 0x0100, 0x0101),
+        (0x9102, 30, 0x0101, 0x0100),
+    ] {
+        let cpu = run_ptr(&[word], |c| {
+            c.registers[base] = start as u8;
+            c.registers[base + 1] = (start >> 8) as u8;
+            c.sram[0] = 0x5A;
+        });
+        assert_eq!(cpu.registers[16], 0x5A, "{word:#06X}");
+        let got = ((cpu.registers[base + 1] as u16) << 8) | cpu.registers[base] as u16;
+        assert_eq!(got, end, "{word:#06X} pointer");
+    }
+}
+
+#[test]
+fn test_execute_st_modes() {
+    // ST X, R16 / X+ / -X
+    for (word, start, end, offset) in [
+        (0x930Cu16, 0x0100u16, 0x0100u16, 0usize),
+        (0x930D, 0x0100, 0x0101, 0),
+        (0x930E, 0x0101, 0x0100, 0),
+    ] {
+        let cpu = run_ptr(&[word], |c| {
+            c.registers[16] = 0x42;
+            c.registers[26] = start as u8;
+            c.registers[27] = (start >> 8) as u8;
+        });
+        assert_eq!(cpu.sram[offset], 0x42, "{word:#06X}");
+        assert_eq!(cpu.registers[16], 0x42);
+        let got = ((cpu.registers[27] as u16) << 8) | cpu.registers[26] as u16;
+        assert_eq!(got, end, "{word:#06X} pointer");
+    }
+
+    // ST Y+, R16 / ST -Z, R16
+    let cpu = run_ptr(&[0x9309], |c| {
+        c.registers[16] = 0x42;
+        c.registers[29] = 0x01;
+    });
+    assert_eq!(cpu.sram[0], 0x42);
+    assert_eq!(cpu.registers[28], 0x01);
+    let cpu = run_ptr(&[0x9302], |c| {
+        c.registers[16] = 0x42;
+        c.registers[30] = 0x01;
+        c.registers[31] = 0x01;
+    });
+    assert_eq!(cpu.sram[0], 0x42);
+    assert_eq!((cpu.registers[31], cpu.registers[30]), (0x01, 0x00));
+}
+
+#[test]
+fn test_execute_ldd_std() {
+    // LDD R16, Y+1 (Y = 0x0100) : reads 0x0101, Y unchanged
+    let cpu = run_ptr(&[0x8109], |c| {
+        c.registers[29] = 0x01;
+        c.sram[1] = 0x77;
+    });
+    assert_eq!(cpu.registers[16], 0x77);
+    assert_eq!((cpu.registers[29], cpu.registers[28]), (0x01, 0x00));
+
+    // LDD R16, Z+63
+    let cpu = run_ptr(&[0xAD07], |c| {
+        c.registers[31] = 0x01;
+        c.sram[63] = 0x66;
+    });
+    assert_eq!(cpu.registers[16], 0x66);
+
+    // LDD R16, Y+0 (this is LD R16, Y)
+    let cpu = run_ptr(&[0x8108], |c| {
+        c.registers[29] = 0x01;
+        c.sram[0] = 0x11;
+    });
+    assert_eq!(cpu.registers[16], 0x11);
+
+    // STD Y+1, R16 / STD Z+63, R16
+    let cpu = run_ptr(&[0x8309], |c| {
+        c.registers[16] = 0x42;
+        c.registers[29] = 0x01;
+    });
+    assert_eq!(cpu.sram[1], 0x42);
+    let cpu = run_ptr(&[0xAF07], |c| {
+        c.registers[16] = 0x42;
+        c.registers[31] = 0x01;
+    });
+    assert_eq!(cpu.sram[63], 0x42);
+}
+
+#[test]
+fn test_execute_ld_st_zones() {
+    // LD R16, X with X = 0x0010 (a register) / 0x0025 (PORTB) / 0x005F (SREG)
+    let cpu = run_ptr(&[0x910C], |c| {
+        c.registers[26] = 0x10;
+        c.registers[17] = 0x33;
+        c.registers[16] = 0x00;
+    });
+    assert_eq!(cpu.registers[16], 0x00);
+    let cpu = run_ptr(&[0x910C], |c| {
+        c.registers[26] = 0x11;
+        c.registers[17] = 0x33;
+    });
+    assert_eq!(cpu.registers[16], 0x33);
+    let cpu = run_ptr(&[0x910C], |c| {
+        c.registers[26] = 0x25;
+        c.io[0x05] = 0xAA;
+    });
+    assert_eq!(cpu.registers[16], 0xAA);
+    let cpu = run_ptr(&[0x910C], |c| {
+        c.registers[26] = 0x5F;
+        c.sreg = 0x5A;
+    });
+    assert_eq!(cpu.registers[16], 0x5A);
+
+    // ST X, R16 to SREG
+    let cpu = run_ptr(&[0x930C], |c| {
+        c.registers[16] = 0xA5;
+        c.registers[26] = 0x5F;
+    });
+    assert_eq!(cpu.sreg, 0xA5);
+}
+
+#[test]
+fn test_execute_ld_st_wrap_and_errors() {
+    // -X from 0x0000 : the pointer wraps to 0xFFFF, the access fails, the pointer is untouched
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x910E]);
+    cpu.registers[16] = 0x11;
+    assert!(cpu.step().is_err());
+    assert_eq!(cpu.registers[16], 0x11);
+    assert_eq!((cpu.registers[27], cpu.registers[26]), (0x00, 0x00));
+
+    // LD R16, X+ at 0x0900 : error, pointer not moved
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x910D]);
+    cpu.registers[26] = 0x00;
+    cpu.registers[27] = 0x09;
+    assert!(cpu.step().is_err());
+    assert_eq!((cpu.registers[27], cpu.registers[26]), (0x09, 0x00));
+
+    // ST X+ to 0x08FF then the pointer wraps nowhere : 0x08FF -> 0x0900
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x930D]);
+    cpu.registers[16] = 0x42;
+    cpu.registers[26] = 0xFF;
+    cpu.registers[27] = 0x08;
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.sram[0x08FF - 0x100], 0x42);
+    assert_eq!((cpu.registers[27], cpu.registers[26]), (0x09, 0x00));
+
+    // LDD R16, Y+1 with Y = 0xFFFF : no overflow panic, address wraps to 0x0000 (R0)
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x8109]);
+    cpu.registers[28] = 0xFF;
+    cpu.registers[29] = 0xFF;
+    cpu.registers[0] = 0x21;
+    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.registers[16], 0x21);
+}
+
+#[test]
+fn test_execute_ld_st_keep_flags() {
+    let cpu = run_ptr(&[0x910D], |c| {
+        c.registers[27] = 0x01;
+        c.sreg = 0xFF;
+    });
+    assert_eq!(cpu.sreg, 0xFF);
+}
+
+#[test]
+fn test_execute_clear_bss_loop_integration() {
+    // 0: LDI R26,0 / 1: LDI R27,1 / 2: LDI R17,1
+    // 3: ST X+,R1 / 4: CPI R26,4 / 5: CPC R27,R17 / 6: BRNE -4 (back to 3)
+    // clears four bytes of SRAM at 0x0100..0x0103, the end is 0x0104
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xE0A0, 0xE0B1, 0xE011, 0x921D, 0x30A4, 0x07B1, 0xF7E1]);
+    for i in 0..8 {
+        cpu.sram[i] = 0xFF;
+    }
+    step_n(&mut cpu, 3 + 4 * 4);
+    assert_eq!(&cpu.sram[0..4], &[0, 0, 0, 0]);
+    assert_eq!(cpu.sram[4], 0xFF);
+    assert_eq!(cpu.pc, 7);
+}
+
+#[test]
+fn test_execute_copy_ld_x_plus_st_y_plus() {
+    // LD R16,X+ / ST Y+,R16 twice : copy sram[0..2] to sram[8..10]
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x910D, 0x9309, 0x910D, 0x9309]);
+    cpu.registers[27] = 0x01;
+    cpu.registers[28] = 0x08;
+    cpu.registers[29] = 0x01;
+    cpu.sram[0] = 0xAA;
+    cpu.sram[1] = 0xBB;
+    step_n(&mut cpu, 4);
+    assert_eq!(cpu.sram[8], 0xAA);
+    assert_eq!(cpu.sram[9], 0xBB);
+}

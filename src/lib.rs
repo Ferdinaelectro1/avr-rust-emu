@@ -67,8 +67,18 @@ enum Instruction {
     Sbrs { rr: u8, b: u8 },
     Sbic { a: u8, b: u8 },
     Sbis { a: u8, b: u8 },
+    Ld { rd: u8 , pointer: Pointer, mode: Mode },
+    St { rr: u8 , pointer: Pointer, mode: Mode },
+    Ldd { rd: u8, pointer: Pointer, q: u8 },
+    Std { rr: u8, pointer: Pointer, q: u8 },
     Unknown(u16),
 }
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Pointer { X, Y, Z }
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Mode { Direct, PostInc, PreDec }
 
 fn decode(word: u16) -> Instruction {
     match word {
@@ -263,6 +273,96 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFF00 == 0x9B00 => Instruction::Sbis {
             a: ((w >> 3) & 0x001F) as u8,
             b: (w & 0x0007) as u8,
+        },
+        w if w & 0xFE0F == 0x900C => Instruction::Ld { 
+            rd: decode_dest(w), 
+            pointer: Pointer::X, 
+            mode: Mode::Direct 
+        },
+        w if w & 0xFE0F == 0x900D => Instruction::Ld { 
+            rd: decode_dest(w), 
+            pointer: Pointer::X, 
+            mode: Mode::PostInc 
+        },
+        w if w & 0xFE0F == 0x900E => Instruction::Ld { 
+            rd: decode_dest(w), 
+            pointer: Pointer::X, 
+            mode: Mode::PreDec 
+        },
+        w if w & 0xFE0F == 0x9009 => Instruction::Ld { 
+            rd: decode_dest(w), 
+            pointer: Pointer::Y, 
+            mode: Mode::PostInc 
+        },
+        w if w & 0xFE0F == 0x900A => Instruction::Ld { 
+            rd: decode_dest(w), 
+            pointer: Pointer::Y, 
+            mode: Mode::PreDec 
+        },
+        w if w & 0xFE0F == 0x9001 => Instruction::Ld { 
+            rd: decode_dest(w), 
+            pointer: Pointer::Z, 
+            mode: Mode::PostInc 
+        },
+        w if w & 0xFE0F == 0x9002 => Instruction::Ld { 
+            rd: decode_dest(w), 
+            pointer: Pointer::Z, 
+            mode: Mode::PreDec 
+        },
+        w if w & 0xFE0F == 0x920C => Instruction::St { 
+            rr: decode_dest(w), 
+            pointer: Pointer::X, 
+            mode: Mode::Direct 
+        },
+        w if w & 0xFE0F == 0x920D => Instruction::St { 
+            rr: decode_dest(w), 
+            pointer: Pointer::X, 
+            mode: Mode::PostInc 
+        },
+        w if w & 0xFE0F == 0x920E => Instruction::St { 
+            rr: decode_dest(w), 
+            pointer: Pointer::X, 
+            mode: Mode::PreDec 
+        },
+        w if w & 0xFE0F == 0x9209 => Instruction::St { 
+            rr: decode_dest(w), 
+            pointer: Pointer::Y, 
+            mode: Mode::PostInc 
+        },
+        w if w & 0xFE0F == 0x920A => Instruction::St { 
+            rr: decode_dest(w), 
+            pointer: Pointer::Y, 
+            mode: Mode::PreDec 
+        },
+        w if w & 0xFE0F == 0x9201 => Instruction::St { 
+            rr: decode_dest(w), 
+            pointer: Pointer::Z, 
+            mode: Mode::PostInc 
+        },
+        w if w & 0xFE0F == 0x9202 => Instruction::St { 
+            rr: decode_dest(w), 
+            pointer: Pointer::Z, 
+            mode: Mode::PreDec 
+        },
+        w if w & 0xD208 == 0x8000 => Instruction::Ldd { 
+            rd: decode_dest(w), 
+            pointer: Pointer::Z, 
+            q: (((w >> 7) & 0x0018) | ((w >> 8) & 0x0020) | (w & 0x0007)) as u8
+        },
+        w if w & 0xD208 == 0x8008 => Instruction::Ldd { 
+            rd: decode_dest(w), 
+            pointer: Pointer::Y, 
+            q: (((w >> 7) & 0x0018) | ((w >> 8) & 0x0020) | (w & 0x0007)) as u8
+        },
+        w if w & 0xD208 == 0x8200 => Instruction::Std { 
+            rr: decode_dest(w), 
+            pointer: Pointer::Z, 
+            q: (((w >> 7) & 0x0018) | ((w >> 8) & 0x0020) | (w & 0x0007)) as u8
+        },
+        w if w & 0xD208 == 0x8208 => Instruction::Std { 
+            rr: decode_dest(w), 
+            pointer: Pointer::Y, 
+            q: (((w >> 7) & 0x0018) | ((w >> 8) & 0x0020) | (w & 0x0007)) as u8
         },
         _ => Instruction::Unknown(word),
     }
@@ -812,6 +912,52 @@ impl Cpu {
                 }
                 Ok(())
             }
+            Instruction::Ld { rd, pointer, mode } => {
+                let ptr = self.read_ptr(pointer);
+                match mode {
+                    Mode::Direct => { 
+                        self.registers[rd as usize] = self.read_data(ptr)?; 
+                    },
+                    Mode::PostInc => { 
+                        self.registers[rd as usize] = self.read_data(ptr)?;
+                        self.write_ptr(pointer, ptr.wrapping_add(1)); 
+                    },
+                    Mode::PreDec => { 
+                        let addr = ptr.wrapping_sub(1);                         
+                        self.registers[rd as usize] = self.read_data(addr)?;
+                        self.write_ptr(pointer, addr);
+                    }
+                }
+                Ok(())
+            }
+            Instruction::St { rr, pointer, mode } => {
+                let ptr = self.read_ptr(pointer);
+                match mode {
+                    Mode::Direct => { 
+                        self.write_data(ptr,self.registers[rr as usize])?; 
+                    },
+                    Mode::PostInc => { 
+                        self.write_data(ptr,self.registers[rr as usize])?;
+                        self.write_ptr(pointer, ptr.wrapping_add(1)); 
+                    },
+                    Mode::PreDec => { 
+                        let addr = ptr.wrapping_sub(1);
+                        self.write_data(addr,self.registers[rr as usize])?;
+                        self.write_ptr(pointer, addr); 
+                    }
+                }
+                Ok(())
+            }
+            Instruction::Ldd { rd, pointer, q } => {
+                let ptr = self.read_ptr(pointer);
+                self.registers[rd as usize] = self.read_data(ptr.wrapping_add(q as u16))?; 
+                Ok(())
+            }
+            Instruction::Std { rr, pointer, q } => {
+                let ptr = self.read_ptr(pointer);
+                self.write_data(ptr.wrapping_add(q as u16),self.registers[rr as usize])?; 
+                Ok(())
+            }
         }
     }
 
@@ -1010,6 +1156,31 @@ impl Cpu {
         }
         if res == 0 {
             self.sreg |= FLAG_ZERO;
+        }
+    }
+
+    fn read_ptr(&mut self,pointer: Pointer) -> u16 {
+        match pointer {
+                    Pointer::X => ((self.registers[27] as u16) << 8)|(self.registers[26] as u16),
+                    Pointer::Y => ((self.registers[29] as u16) << 8)|(self.registers[28] as u16),
+                    Pointer::Z => ((self.registers[31] as u16) << 8)|(self.registers[30] as u16)
+        }
+    }
+
+    fn write_ptr(&mut self,pointer: Pointer,new_value: u16) {
+        match pointer {
+            Pointer::X => {
+                self.registers[27] = ((new_value >> 8) & 0x00FF) as u8;
+                self.registers[26] = (new_value & 0x00FF) as u8;
+            }
+            Pointer::Y => {
+                self.registers[29] = ((new_value >> 8) & 0x00FF) as u8;
+                self.registers[28] = (new_value & 0x00FF) as u8;
+            }
+            Pointer::Z => {
+                self.registers[31] = ((new_value >> 8) & 0x00FF) as u8;
+                self.registers[30] = (new_value & 0x00FF) as u8;
+            }
         }
     }
 
