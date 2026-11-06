@@ -4439,3 +4439,139 @@ fn test_execute_avr_gcc_startup_integration() {
     step_n(&mut cpu, 1);
     assert_eq!(cpu.registers[17], 9);
 }
+
+#[test]
+fn test_decode_sbi_cbi() {
+    // SBI 0x04,5 / 0x05,5 / 0x00,0 / 0x1F,7
+    assert_eq!(decode(0x9A25), Instruction::Sbi { a: 0x04, b: 5 });
+    assert_eq!(decode(0x9A2D), Instruction::Sbi { a: 0x05, b: 5 });
+    assert_eq!(decode(0x9A00), Instruction::Sbi { a: 0x00, b: 0 });
+    assert_eq!(decode(0x9AFF), Instruction::Sbi { a: 0x1F, b: 7 });
+    // CBI 0x04,5 / 0x05,5 / 0x00,0 / 0x1F,7
+    assert_eq!(decode(0x9825), Instruction::Cbi { a: 0x04, b: 5 });
+    assert_eq!(decode(0x982D), Instruction::Cbi { a: 0x05, b: 5 });
+    assert_eq!(decode(0x9800), Instruction::Cbi { a: 0x00, b: 0 });
+    assert_eq!(decode(0x98FF), Instruction::Cbi { a: 0x1F, b: 7 });
+}
+
+#[test]
+fn test_decode_sbi_cbi_all_addresses_and_bits() {
+    for a in 0u8..32 {
+        for b in 0u8..8 {
+            let low = ((a as u16) << 3) | b as u16;
+            assert_eq!(
+                decode(0x9A00 | low),
+                Instruction::Sbi { a, b },
+                "SBI {a:#04X},{b}"
+            );
+            assert_eq!(
+                decode(0x9800 | low),
+                Instruction::Cbi { a, b },
+                "CBI {a:#04X},{b}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_decode_sbi_cbi_neighbours() {
+    // SBIC, SBIS, SBIW, MUL
+    for word in [0x9900, 0x9B00, 0x99FF, 0x9BFF, 0x9700, 0x9C00] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Sbi { .. } | Instruction::Cbi { .. }
+            ),
+            "{word:#06X} must not decode as SBI or CBI"
+        );
+    }
+    assert!(!matches!(decode(0x9A25), Instruction::Cbi { .. }));
+    assert!(!matches!(decode(0x9825), Instruction::Sbi { .. }));
+}
+
+#[test]
+fn test_execute_sbi_sets_bit() {
+    // SBI 0x05, 5 on an empty PORTB
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9A2D]);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.io[0x05], 0x20);
+
+    // other bits are kept : 0x0F -> 0x2F
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9A2D]);
+    cpu.io[0x05] = 0x0F;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.io[0x05], 0x2F);
+}
+
+#[test]
+fn test_execute_cbi_clears_bit() {
+    // CBI 0x05, 5 on a full PORTB
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x982D]);
+    cpu.io[0x05] = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.io[0x05], 0xDF);
+}
+
+#[test]
+fn test_execute_sbi_cbi_all_bits() {
+    for b in 0u8..8 {
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[0x9A00 | (5u16 << 3) | b as u16]);
+        step_n(&mut cpu, 1);
+        assert_eq!(cpu.io[5], 1u8 << b, "SBI 5,{b}");
+
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[0x9800 | (5u16 << 3) | b as u16]);
+        cpu.io[5] = 0xFF;
+        step_n(&mut cpu, 1);
+        assert_eq!(cpu.io[5], !(1u8 << b), "CBI 5,{b}");
+    }
+}
+
+#[test]
+fn test_execute_sbi_cbi_idempotent() {
+    // SBI twice
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9A2D, 0x9A2D]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.io[0x05], 0x20);
+
+    // CBI on a bit already off
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x982D]);
+    cpu.io[0x05] = 0x01;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.io[0x05], 0x01);
+}
+
+#[test]
+fn test_execute_sbi_cbi_use_io_and_keep_flags() {
+    // the bit lands in io, not in R5, and sreg is untouched
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9A2D, 0x982D]);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.registers[5], 0x00);
+    assert_eq!(cpu.io[0x05], 0x20);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.io[0x05], 0x00);
+    assert_eq!(cpu.registers[5], 0x00);
+    assert_eq!(cpu.sreg, 0xFF);
+}
+
+#[test]
+fn test_execute_blink_start_integration() {
+    // SBI 0x04,5 (DDRB) / SBI 0x05,5 (PORTB on) / CBI 0x05,5 (PORTB off)
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9A25, 0x9A2D, 0x982D]);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.io[0x04], 0x20);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.io[0x05], 0x20);
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.io[0x05], 0x00);
+    assert_eq!(cpu.io[0x04], 0x20);
+}

@@ -60,6 +60,8 @@ enum Instruction {
     Ijmp,
     Icall,
     Reti,
+    Sbi { a: u8, b: u8 },
+    Cbi { a: u8, b: u8 },
     Unknown(u16),
 }
 
@@ -229,6 +231,14 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFFFF == 0x9409 => Instruction::Ijmp,
         w if w & 0xFFFF == 0x9509 => Instruction::Icall,
         w if w & 0xFFFF == 0x9518 => Instruction::Reti,
+        w if w & 0xFF00 == 0x9800 => Instruction::Cbi {
+            a: ((w >> 3) & 0x001F) as u8,
+            b: (w & 0x0007) as u8,
+        },
+        w if w & 0xFF00 == 0x9A00 => Instruction::Sbi {
+            a: ((w >> 3) & 0x001F) as u8,
+            b: (w & 0x0007) as u8,
+        },
         _ => Instruction::Unknown(word),
     }
 }
@@ -721,6 +731,16 @@ impl Cpu {
                 let pc_l = self.read_data(self.sp)?;
                 self.pc = ((pc_h as u16) << 8) | (pc_l as u16);
                 self.sreg |= FLAG_INTERRUPT_ENABLE;
+                Ok(())
+            }
+            Instruction::Sbi { a, b } => {
+                let reg_value = self.read_data(a as u16 + IO_START)?;
+                self.write_data(a as u16 + IO_START, reg_value | (1 << b))?;
+                Ok(())
+            }
+            Instruction::Cbi { a, b } => {
+                let reg_value = self.read_data(a as u16 + IO_START)?;
+                self.write_data(a as u16 + IO_START, reg_value & (!(1 << b)))?;
                 Ok(())
             }
         }
