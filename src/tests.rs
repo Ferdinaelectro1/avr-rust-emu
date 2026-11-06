@@ -5279,3 +5279,58 @@ fn test_execute_copy_data_loop_integration() {
     assert_eq!(cpu.sram[1], 0xBE);
     assert_eq!((cpu.registers[27], cpu.registers[26]), (0x01, 0x02));
 }
+
+#[test]
+fn test_decode_sleep_wdr_break() {
+    assert_eq!(decode(0x9588), Instruction::Sleep);
+    assert_eq!(decode(0x95A8), Instruction::Wdr);
+    assert_eq!(decode(0x9598), Instruction::Break);
+}
+
+#[test]
+fn test_decode_sleep_wdr_break_neighbours() {
+    // RET, RETI, LPM, SPM, unused words, SLEEP + 1
+    for word in [0x9508, 0x9518, 0x95C8, 0x95E8, 0x95B8, 0x95D8, 0x95F8, 0x9589] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Sleep | Instruction::Wdr | Instruction::Break
+            ),
+            "{word:#06X} must not decode as SLEEP, WDR or BREAK"
+        );
+    }
+    // they do not decode as each other
+    assert!(!matches!(decode(0x9588), Instruction::Wdr | Instruction::Break));
+    assert!(!matches!(decode(0x95A8), Instruction::Sleep | Instruction::Break));
+    assert!(!matches!(decode(0x9598), Instruction::Sleep | Instruction::Wdr));
+}
+
+#[test]
+fn test_execute_sleep_wdr_break_do_nothing() {
+    for word in [0x9588u16, 0x95A8, 0x9598] {
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[word]);
+        cpu.sreg = 0xFF;
+        cpu.sp = 0x08FF;
+        cpu.registers[16] = 0x55;
+        cpu.registers[31] = 0xAA;
+        cpu.io[5] = 0x20;
+        step_n(&mut cpu, 1);
+        assert_eq!(cpu.pc, 1, "{word:#06X}");
+        assert_eq!(cpu.sreg, 0xFF, "{word:#06X}");
+        assert_eq!(cpu.sp, 0x08FF, "{word:#06X}");
+        assert_eq!(cpu.registers[16], 0x55, "{word:#06X}");
+        assert_eq!(cpu.registers[31], 0xAA, "{word:#06X}");
+        assert_eq!(cpu.io[5], 0x20, "{word:#06X}");
+    }
+}
+
+#[test]
+fn test_execute_sleep_wdr_break_in_a_row() {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9588, 0x95A8, 0x9598]);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 3);
+    assert_eq!(cpu.pc, 3);
+    assert_eq!(cpu.sreg, 0xFF);
+}

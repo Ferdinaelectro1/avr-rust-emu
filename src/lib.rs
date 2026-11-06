@@ -74,6 +74,9 @@ enum Instruction {
     Lpm,
     Lpmz { rd: u8 },
     Lpmzplus { rd: u8 },
+    Sleep,
+    Wdr,
+    Break,
     Unknown(u16),
 }
 
@@ -374,6 +377,9 @@ fn decode(word: u16) -> Instruction {
         w if w & 0xFE0F == 0x9005 => Instruction::Lpmzplus { 
             rd: decode_dest(w) 
         },
+        w if w & 0xFFFF == 0x9588 => Instruction::Sleep,
+        w if w & 0xFFFF == 0x9598 => Instruction::Break,
+        w if w & 0xFFFF == 0x95A8 => Instruction::Wdr,
         _ => Instruction::Unknown(word),
     }
 }
@@ -990,6 +996,18 @@ impl Cpu {
                 let z = self.read_ptr(Pointer::Z);
                 self.registers[rd as usize] = self.read_flash_byte(z)?;
                 self.write_ptr(Pointer::Z, z.wrapping_add(1));
+                Ok(())
+            }
+            Instruction::Sleep => {
+                //TODO
+                Ok(())
+            }
+            Instruction::Wdr => {
+                //TODO
+                Ok(())
+            }
+            Instruction::Break => {
+                //TODO
                 Ok(())
             }
         }
