@@ -5162,3 +5162,120 @@ fn test_execute_copy_ld_x_plus_st_y_plus() {
     assert_eq!(cpu.sram[8], 0xAA);
     assert_eq!(cpu.sram[9], 0xBB);
 }
+
+#[test]
+fn test_decode_lpm() {
+    assert_eq!(decode(0x95C8), Instruction::Lpm);
+    assert_eq!(decode(0x9104), Instruction::Lpmz { rd: 16 });
+    assert_eq!(decode(0x9004), Instruction::Lpmz { rd: 0 });
+    assert_eq!(decode(0x91F4), Instruction::Lpmz { rd: 31 });
+    assert_eq!(decode(0x9105), Instruction::Lpmzplus { rd: 16 });
+    assert_eq!(decode(0x9005), Instruction::Lpmzplus { rd: 0 });
+    for r in 0u8..32 {
+        let low = (r as u16) << 4;
+        assert_eq!(decode(0x9004 | low), Instruction::Lpmz { rd: r }, "LPM R{r},Z");
+        assert_eq!(decode(0x9005 | low), Instruction::Lpmzplus { rd: r }, "LPM R{r},Z+");
+    }
+}
+
+#[test]
+fn test_decode_lpm_neighbours() {
+    // ELPM, ELPM, WDR, SPM, XCH, LAS, LD Z+, LD X
+    for word in [0x9006, 0x9007, 0x95D8, 0x95E8, 0x95A8, 0x9204, 0x9205, 0x9001, 0x900C] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Lpm | Instruction::Lpmz { .. } | Instruction::Lpmzplus { .. }
+            ),
+            "{word:#06X} must not decode as LPM"
+        );
+    }
+}
+
+fn run_lpm(word: u16, z: u16) -> Cpu {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[word]);
+    cpu.flash[0x10] = 0xBEEF;
+    cpu.registers[30] = z as u8;
+    cpu.registers[31] = (z >> 8) as u8;
+    step_n(&mut cpu, 1);
+    cpu
+}
+
+#[test]
+fn test_execute_lpm_low_and_high_byte() {
+    // Z = 0x0020 : low byte of word 0x10 ; Z = 0x0021 : high byte
+    assert_eq!(run_lpm(0x9104, 0x0020).registers[16], 0xEF);
+    assert_eq!(run_lpm(0x9104, 0x0021).registers[16], 0xBE);
+    assert_eq!(run_lpm(0x9105, 0x0020).registers[16], 0xEF);
+    assert_eq!(run_lpm(0x9105, 0x0021).registers[16], 0xBE);
+}
+
+#[test]
+fn test_execute_lpm_r0() {
+    let cpu = run_lpm(0x95C8, 0x0021);
+    assert_eq!(cpu.registers[0], 0xBE);
+    assert_eq!(cpu.registers[16], 0x00);
+    let cpu = run_lpm(0x95C8, 0x0020);
+    assert_eq!(cpu.registers[0], 0xEF);
+}
+
+#[test]
+fn test_execute_lpm_z_unchanged_and_post_increment() {
+    let cpu = run_lpm(0x9104, 0x0020);
+    assert_eq!((cpu.registers[31], cpu.registers[30]), (0x00, 0x20));
+    let cpu = run_lpm(0x9105, 0x0020);
+    assert_eq!((cpu.registers[31], cpu.registers[30]), (0x00, 0x21));
+    // carry into the high byte : 0x00FF -> 0x0100
+    let cpu = run_lpm(0x9105, 0x00FF);
+    assert_eq!((cpu.registers[31], cpu.registers[30]), (0x01, 0x00));
+}
+
+#[test]
+fn test_execute_lpm_z_plus_reads_low_then_high() {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9105, 0x9115]);
+    cpu.flash[0x10] = 0xBEEF;
+    cpu.registers[30] = 0x20;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[16], 0xEF);
+    assert_eq!(cpu.registers[17], 0xBE);
+}
+
+#[test]
+fn test_execute_lpm_outside_flash_is_an_error() {
+    for word in [0x95C8u16, 0x9104, 0x9105] {
+        let mut cpu = Cpu::new();
+        cpu.load_program(&[word]);
+        cpu.registers[16] = 0x11;
+        cpu.registers[31] = 0x80; // Z = 0x8000 -> word index 16384
+        assert!(cpu.step().is_err(), "{word:#06X}");
+        assert_eq!(cpu.registers[16], 0x11);
+        assert_eq!((cpu.registers[31], cpu.registers[30]), (0x80, 0x00));
+    }
+}
+
+#[test]
+fn test_execute_lpm_keeps_flags() {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9105]);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 1);
+    assert_eq!(cpu.sreg, 0xFF);
+}
+
+#[test]
+fn test_execute_copy_data_loop_integration() {
+    // 0: LDI R30,0x10 / 1: LDI R31,0 / 2: LDI R26,0 / 3: LDI R27,1
+    // 4: LPM R0,Z+ / 5: ST X+,R0 / 6: LPM R0,Z+ / 7: ST X+,R0
+    // data in flash word 8 (byte address 0x10) = 0xBEEF
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[
+        0xE1E0, 0xE0F0, 0xE0A0, 0xE0B1, 0x9005, 0x920D, 0x9005, 0x920D,
+    ]);
+    cpu.flash[8] = 0xBEEF;
+    step_n(&mut cpu, 8);
+    assert_eq!(cpu.sram[0], 0xEF);
+    assert_eq!(cpu.sram[1], 0xBE);
+    assert_eq!((cpu.registers[27], cpu.registers[26]), (0x01, 0x02));
+}

@@ -71,6 +71,9 @@ enum Instruction {
     St { rr: u8 , pointer: Pointer, mode: Mode },
     Ldd { rd: u8, pointer: Pointer, q: u8 },
     Std { rr: u8, pointer: Pointer, q: u8 },
+    Lpm,
+    Lpmz { rd: u8 },
+    Lpmzplus { rd: u8 },
     Unknown(u16),
 }
 
@@ -364,6 +367,13 @@ fn decode(word: u16) -> Instruction {
             pointer: Pointer::Y, 
             q: (((w >> 7) & 0x0018) | ((w >> 8) & 0x0020) | (w & 0x0007)) as u8
         },
+        w if w & 0xFFFF == 0x95C8 => Instruction::Lpm,
+        w if w & 0xFE0F == 0x9004 => Instruction::Lpmz { 
+            rd: decode_dest(w)
+        },
+        w if w & 0xFE0F == 0x9005 => Instruction::Lpmzplus { 
+            rd: decode_dest(w) 
+        },
         _ => Instruction::Unknown(word),
     }
 }
@@ -465,6 +475,14 @@ impl Cpu {
             SRAM_START..=RAMEND => Ok(self.sram[(address - SRAM_START) as usize]),
             _ => Err(String::from("Out of Adress Space")),
         }
+    }
+
+    fn read_flash_byte(&self, z: u16) -> Result<u8, String> {
+        let word = *self
+            .flash
+            .get((z >> 1) as usize)
+            .ok_or_else(|| format!("LPM: address {z:#06X} outside the flash"))?;
+        Ok(if z & 1 == 0 { word as u8 } else { (word >> 8) as u8 })
     }
 
     fn fetch(&mut self) -> Result<u16, String> {
@@ -956,6 +974,22 @@ impl Cpu {
             Instruction::Std { rr, pointer, q } => {
                 let ptr = self.read_ptr(pointer);
                 self.write_data(ptr.wrapping_add(q as u16),self.registers[rr as usize])?; 
+                Ok(())
+            }
+            Instruction::Lpm => {
+                let z = self.read_ptr(Pointer::Z);
+                self.registers[0] = self.read_flash_byte(z)?;
+                Ok(())
+            }
+            Instruction::Lpmz { rd } => {
+                let z = self.read_ptr(Pointer::Z);
+                self.registers[rd as usize] = self.read_flash_byte(z)?;
+                Ok(())
+            }
+            Instruction::Lpmzplus { rd } => {
+                let z = self.read_ptr(Pointer::Z);
+                self.registers[rd as usize] = self.read_flash_byte(z)?;
+                self.write_ptr(Pointer::Z, z.wrapping_add(1));
                 Ok(())
             }
         }
