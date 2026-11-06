@@ -1,6 +1,7 @@
 use std::assert_eq;
 
 use super::*;
+use crate::hex::load_hex;
 
 #[test]
 fn write_regs_test() {
@@ -5396,4 +5397,20 @@ fn test_execute_never_panics_on_any_word() {
         cpu.sreg = 0xFF;
         let _ = cpu.step();
     }
+}
+
+//Loader test
+#[test]
+fn load_hex_puts_words_in_flash() {
+    let mut cpu = Cpu::new();
+    // octets 0x0C 0x94 à l'adresse 0 → mot 0x940C (little-endian)
+    let hex = ":020000000C945E\n:00000001FF\n";
+    load_hex(hex, &mut cpu).unwrap();
+    assert_eq!(cpu.flash[0], 0x940C);
+}
+
+#[test]
+fn load_hex_rejects_bad_checksum() {
+    let mut cpu = Cpu::new();
+    assert!(load_hex(":0100000042BE\n", &mut cpu).is_err());
 }
