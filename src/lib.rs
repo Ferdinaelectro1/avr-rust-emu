@@ -62,6 +62,11 @@ enum Instruction {
     Reti,
     Sbi { a: u8, b: u8 },
     Cbi { a: u8, b: u8 },
+    Cpse { rd: u8, rr: u8 },
+    Sbrc { rr: u8, b: u8 },
+    Sbrs { rr: u8, b: u8 },
+    Sbic { a: u8, b: u8 },
+    Sbis { a: u8, b: u8 },
     Unknown(u16),
 }
 
@@ -239,6 +244,26 @@ fn decode(word: u16) -> Instruction {
             a: ((w >> 3) & 0x001F) as u8,
             b: (w & 0x0007) as u8,
         },
+        w if w & 0xFC00 == 0x1000 => {
+            let (dest, src) = decode_dest_src(w);
+            Instruction::Cpse { rd: dest, rr: src }
+        }
+        w if w & 0xFE08 == 0xFC00 => Instruction::Sbrc {
+            rr: ((w >> 4) & 0x001F) as u8,
+            b: (w & 0x0007) as u8,
+        },
+        w if w & 0xFE08 == 0xFE00 => Instruction::Sbrs {
+            rr: ((w >> 4) & 0x001F) as u8,
+            b: (w & 0x0007) as u8,
+        },
+        w if w & 0xFF00 == 0x9900 => Instruction::Sbic {
+            a: ((w >> 3) & 0x001F) as u8,
+            b: (w & 0x0007) as u8,
+        },
+        w if w & 0xFF00 == 0x9B00 => Instruction::Sbis {
+            a: ((w >> 3) & 0x001F) as u8,
+            b: (w & 0x0007) as u8,
+        },
         _ => Instruction::Unknown(word),
     }
 }
@@ -349,6 +374,20 @@ impl Cpu {
         let word: u16 = self.flash[self.pc as usize];
         self.pc += 1;
         Ok(word)
+    }
+
+    fn skip_next(&mut self) -> Result<(), String> {
+        let next = self.fetch()?;
+        if matches!(
+            decode(next),
+            Instruction::Lds { .. }
+                | Instruction::Sts { .. }
+                | Instruction::Jmp
+                | Instruction::Call
+        ) {
+            self.fetch()?; // skip the second word too
+        }
+        Ok(())
     }
 
     fn execute(&mut self, instruction: Instruction) -> Result<(), String> {
@@ -741,6 +780,36 @@ impl Cpu {
             Instruction::Cbi { a, b } => {
                 let reg_value = self.read_data(a as u16 + IO_START)?;
                 self.write_data(a as u16 + IO_START, reg_value & (!(1 << b)))?;
+                Ok(())
+            }
+            Instruction::Cpse { rd, rr } => {
+                if self.registers[rd as usize] == self.registers[rr as usize] {
+                    self.skip_next()?;
+                }
+                Ok(())
+            }
+            Instruction::Sbic { a, b } => {
+                if self.read_data(a as u16 + IO_START)? & (1 << b) == 0 {
+                    self.skip_next()?;
+                }
+                Ok(())
+            }
+            Instruction::Sbis { a, b } => {
+                if self.read_data(a as u16 + IO_START)? & (1 << b) != 0 {
+                    self.skip_next()?;
+                }
+                Ok(())
+            }
+            Instruction::Sbrc { rr, b } => {
+                if self.registers[rr as usize] & (1 << b) == 0 {
+                    self.skip_next()?;
+                }
+                Ok(())
+            }
+            Instruction::Sbrs { rr, b } => {
+                if self.registers[rr as usize] & (1 << b) != 0 {
+                    self.skip_next()?;
+                }
                 Ok(())
             }
         }

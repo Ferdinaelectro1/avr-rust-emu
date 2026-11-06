@@ -4575,3 +4575,272 @@ fn test_execute_blink_start_integration() {
     assert_eq!(cpu.io[0x05], 0x00);
     assert_eq!(cpu.io[0x04], 0x20);
 }
+
+#[test]
+fn test_decode_skips() {
+    // CPSE R16,R16 / R16,R17 / R0,R0 / R31,R31
+    assert_eq!(decode(0x1300), Instruction::Cpse { rd: 16, rr: 16 });
+    assert_eq!(decode(0x1301), Instruction::Cpse { rd: 16, rr: 17 });
+    assert_eq!(decode(0x1000), Instruction::Cpse { rd: 0, rr: 0 });
+    assert_eq!(decode(0x13FF), Instruction::Cpse { rd: 31, rr: 31 });
+    // SBRC R16,0 / R16,7 / R0,0 / R31,7
+    assert_eq!(decode(0xFD00), Instruction::Sbrc { rr: 16, b: 0 });
+    assert_eq!(decode(0xFD07), Instruction::Sbrc { rr: 16, b: 7 });
+    assert_eq!(decode(0xFC00), Instruction::Sbrc { rr: 0, b: 0 });
+    assert_eq!(decode(0xFDF7), Instruction::Sbrc { rr: 31, b: 7 });
+    // SBRS R16,0 / R16,7 / R0,0 / R31,7
+    assert_eq!(decode(0xFF00), Instruction::Sbrs { rr: 16, b: 0 });
+    assert_eq!(decode(0xFF07), Instruction::Sbrs { rr: 16, b: 7 });
+    assert_eq!(decode(0xFE00), Instruction::Sbrs { rr: 0, b: 0 });
+    assert_eq!(decode(0xFFF7), Instruction::Sbrs { rr: 31, b: 7 });
+    // SBIC 0x00,0 / 0x05,5 ; SBIS 0x05,5 / 0x1F,7
+    assert_eq!(decode(0x9900), Instruction::Sbic { a: 0x00, b: 0 });
+    assert_eq!(decode(0x992D), Instruction::Sbic { a: 0x05, b: 5 });
+    assert_eq!(decode(0x9B2D), Instruction::Sbis { a: 0x05, b: 5 });
+    assert_eq!(decode(0x9BFF), Instruction::Sbis { a: 0x1F, b: 7 });
+}
+
+#[test]
+fn test_decode_skips_all_operands() {
+    for r in 0u8..32 {
+        for b in 0u8..8 {
+            let low = ((r as u16) << 4) | b as u16;
+            assert_eq!(
+                decode(0xFC00 | low),
+                Instruction::Sbrc { rr: r, b },
+                "SBRC R{r},{b}"
+            );
+            assert_eq!(
+                decode(0xFE00 | low),
+                Instruction::Sbrs { rr: r, b },
+                "SBRS R{r},{b}"
+            );
+        }
+    }
+    for a in 0u8..32 {
+        for b in 0u8..8 {
+            let low = ((a as u16) << 3) | b as u16;
+            assert_eq!(
+                decode(0x9900 | low),
+                Instruction::Sbic { a, b },
+                "SBIC {a:#04X},{b}"
+            );
+            assert_eq!(
+                decode(0x9B00 | low),
+                Instruction::Sbis { a, b },
+                "SBIS {a:#04X},{b}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_decode_skips_neighbours() {
+    // BLD, BST, reserved bit 3, CP, SUB, ADC, SBC, CBI, SBI
+    for word in [
+        0xF800, 0xFA00, 0xFC08, 0xFE08, 0x1400, 0x1800, 0x1C00, 0x0800, 0x9800, 0x9A00,
+    ] {
+        assert!(
+            !matches!(
+                decode(word),
+                Instruction::Cpse { .. }
+                    | Instruction::Sbrc { .. }
+                    | Instruction::Sbrs { .. }
+                    | Instruction::Sbic { .. }
+                    | Instruction::Sbis { .. }
+            ),
+            "{word:#06X} must not decode as a skip"
+        );
+    }
+    // the skips do not decode as each other
+    assert!(!matches!(decode(0xFD00), Instruction::Sbrs { .. }));
+    assert!(!matches!(decode(0xFF00), Instruction::Sbrc { .. }));
+    assert!(!matches!(decode(0x992D), Instruction::Sbis { .. }));
+    assert!(!matches!(decode(0x9B2D), Instruction::Sbic { .. }));
+}
+
+#[test]
+fn test_execute_cpse() {
+    // CPSE R16,R17 / LDI R18,5 (skipped when equal) / LDI R19,6
+    let prog = [0x1301, 0xE025, 0xE036];
+    let mut cpu = Cpu::new();
+    cpu.load_program(&prog);
+    cpu.registers[16] = 7;
+    cpu.registers[17] = 7;
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[18], 0);
+    assert_eq!(cpu.registers[19], 6);
+    assert_eq!(cpu.pc, 3);
+    assert_eq!(cpu.sreg, 0xFF);
+
+    // different : the LDI runs
+    let mut cpu = Cpu::new();
+    cpu.load_program(&prog);
+    cpu.registers[16] = 7;
+    cpu.registers[17] = 8;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[18], 5);
+    assert_eq!(cpu.pc, 2);
+}
+
+#[test]
+fn test_execute_sbrc_sbrs() {
+    // SBRC R16,3 / LDI R18,5 / LDI R19,6
+    let prog = [0xFD03, 0xE025, 0xE036];
+    // bit 3 clear : skip
+    let mut cpu = Cpu::new();
+    cpu.load_program(&prog);
+    cpu.registers[16] = 0x00;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[18], 0);
+    assert_eq!(cpu.registers[19], 6);
+    // bit 3 set : no skip
+    let mut cpu = Cpu::new();
+    cpu.load_program(&prog);
+    cpu.registers[16] = 0x08;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[18], 5);
+
+    // SBRS R16,3 / LDI R18,5 / LDI R19,6
+    let prog = [0xFF03, 0xE025, 0xE036];
+    // bit 3 set : skip
+    let mut cpu = Cpu::new();
+    cpu.load_program(&prog);
+    cpu.registers[16] = 0x08;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[18], 0);
+    assert_eq!(cpu.registers[19], 6);
+    // bit 3 clear : no skip
+    let mut cpu = Cpu::new();
+    cpu.load_program(&prog);
+    cpu.registers[16] = 0x00;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[18], 5);
+}
+
+#[test]
+fn test_execute_sbic_sbis() {
+    // SBIC 0x05,5 / LDI R18,5 / LDI R19,6
+    let prog = [0x992D, 0xE025, 0xE036];
+    let mut cpu = Cpu::new();
+    cpu.load_program(&prog);
+    cpu.io[0x05] = 0x00;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[18], 0);
+    assert_eq!(cpu.registers[19], 6);
+    let mut cpu = Cpu::new();
+    cpu.load_program(&prog);
+    cpu.io[0x05] = 0x20;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[18], 5);
+
+    // SBIS 0x05,5 / LDI R18,5 / LDI R19,6
+    let prog = [0x9B2D, 0xE025, 0xE036];
+    let mut cpu = Cpu::new();
+    cpu.load_program(&prog);
+    cpu.io[0x05] = 0x20;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[18], 0);
+    assert_eq!(cpu.registers[19], 6);
+    let mut cpu = Cpu::new();
+    cpu.load_program(&prog);
+    cpu.io[0x05] = 0x00;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[18], 5);
+}
+
+#[test]
+fn test_execute_sbis_reads_io_not_registers() {
+    // R5 has bit 5 set but io[5] does not : no skip
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9B2D, 0xE025]);
+    cpu.registers[5] = 0x20;
+    cpu.io[0x05] = 0x00;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.registers[18], 5);
+}
+
+#[test]
+fn test_execute_skip_over_two_word_instructions() {
+    // SBRC R16,0 (R16 = 0 : skip) / LDS R17,0x0100 / LDI R18,5
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xFD00, 0x9110, 0x0100, 0xE025]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.pc, 4);
+    assert_eq!(cpu.registers[18], 5);
+
+    // STS
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xFD00, 0x9310, 0x0100, 0xE025]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.pc, 4);
+    assert_eq!(cpu.registers[18], 5);
+
+    // JMP : the second word 0xE0FF looks like LDI R31,0x0F and must not run
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xFD00, 0x940C, 0xE0FF, 0xE025]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.pc, 4);
+    assert_eq!(cpu.registers[31], 0);
+    assert_eq!(cpu.registers[18], 5);
+
+    // CALL : nothing is pushed
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xFD00, 0x940E, 0x0010, 0xE025]);
+    cpu.sp = 0x08FF;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.pc, 4);
+    assert_eq!(cpu.sp, 0x08FF);
+}
+
+#[test]
+fn test_execute_skip_one_word_instruction_skips_only_one() {
+    // SBRC R16,0 / LDI R18,5 / LDI R19,6 : only the first LDI is skipped
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xFD00, 0xE025, 0xE036]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.pc, 3);
+    assert_eq!(cpu.registers[19], 6);
+}
+
+#[test]
+fn test_execute_skip_a_skip() {
+    // SBRC R16,0 (skip) / SBRS R17,0 / LDI R18,5
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xFD00, 0xFF10, 0xE025]);
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.pc, 3);
+    assert_eq!(cpu.registers[18], 5);
+}
+
+#[test]
+fn test_execute_skip_at_end_of_flash_is_an_error() {
+    let mut cpu = Cpu::new();
+    cpu.flash[FLASH_SIZE - 1] = 0xFD00;
+    cpu.pc = (FLASH_SIZE - 1) as u16;
+    assert!(cpu.step().is_err());
+}
+
+#[test]
+fn test_execute_skips_keep_flags() {
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0xFD00, 0xE025, 0x9B2D, 0xE036]);
+    cpu.sreg = 0xFF;
+    step_n(&mut cpu, 2);
+    assert_eq!(cpu.sreg, 0xFF);
+}
+
+#[test]
+fn test_execute_wait_loop_integration() {
+    // 0: SBIS 0x05,5 / 1: RJMP -2 (back to 0) / 2: LDI R18,5
+    let mut cpu = Cpu::new();
+    cpu.load_program(&[0x9B2D, 0xCFFE, 0xE025]);
+    cpu.io[0x05] = 0x00;
+    step_n(&mut cpu, 4); // two turns of the loop
+    assert_eq!(cpu.pc, 0);
+    cpu.io[0x05] = 0x20;
+    step_n(&mut cpu, 2); // SBIS skips the RJMP, LDI runs
+    assert_eq!(cpu.registers[18], 5);
+    assert_eq!(cpu.pc, 3);
+}
