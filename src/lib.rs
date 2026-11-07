@@ -1,6 +1,7 @@
 //lib.rs
 pub mod constants;
 pub mod hex;
+pub mod board;
 use std::{format, println};
 
 use crate::constants::*;

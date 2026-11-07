@@ -1,15 +1,14 @@
+#define F_CPU 16000000UL
 #include <avr/io.h>
 #include <util/delay.h>
 
-#ifndef F_CPU 
-#define F_CPU 16000000
-#endif
-
 int main(void) {
-    DDRB |= (1 << PB5);          // PB5 (LED de l'Arduino Uno) en sortie
+    DDRB = 0x3F;                 // PB0..PB5 as outputs
 
     while (1) {
-        PORTB ^= (1 << PB5);     // inverse l'état de la broche
-        _delay_ms(100);
+        for (int j = 0; j < 64; j++) {
+            PORTB = j;    // one LED at a time
+            _delay_ms(500);
+        }
     }
 }
