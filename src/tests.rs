@@ -551,7 +551,7 @@ fn test_execute_nop() {
     let mut cpu = Cpu::new();
     let program: [u16; 1] = [0x0000];
     cpu.load_program(&program);
-    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(1));
     assert_eq!(cpu.pc, 1);
     // NOP must not touch any register
     assert_eq!(cpu.registers, [0; CPU_REGISTERS_SIZE]);
@@ -563,7 +563,7 @@ fn test_execute_ldi() {
     //LDI R16, 5
     let program: [u16; 1] = [0xE005];
     cpu.load_program(&program);
-    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(1));
     assert_eq!(cpu.registers[16], 5);
     assert_eq!(cpu.pc, 1);
 }
@@ -582,7 +582,7 @@ fn test_execute_ldi_high_bound() {
     let mut cpu = Cpu::new();
     // LDI R31, 255
     cpu.load_program(&[0xEFFF]);
-    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(1));
     assert_eq!(cpu.registers[31], 255);
     assert_eq!(cpu.pc, 1);
 }
@@ -592,8 +592,8 @@ fn test_execute_two_ldi() {
     let mut cpu = Cpu::new();
     // LDI R16, 5 / LDI R23, 23
     cpu.load_program(&[0xE005, 0xE177]);
-    assert_eq!(cpu.step(), Ok(()));
-    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(1));
+    assert_eq!(cpu.step(), Ok(1));
     assert_eq!(cpu.registers[16], 5);
     assert_eq!(cpu.registers[23], 23);
     assert_eq!(cpu.pc, 2);
@@ -611,7 +611,7 @@ fn test_step_past_flash_end() {
 fn run_program(cpu: &mut Cpu, programm: &[u16]) {
     cpu.load_program(programm);
     for _ in 0..programm.len() {
-        assert_eq!(cpu.step(), Ok(()));
+        assert!(cpu.step().is_ok());
     }
 }
 
@@ -947,7 +947,7 @@ fn test_decode_rjmp_neighbours_are_not_rjmp() {
 fn test_execute_rjmp_zero_goes_to_next_instruction() {
     let mut cpu = Cpu::new();
     cpu.load_program(&[0xC000]);
-    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(2));
     assert_eq!(cpu.pc, 1);
 }
 
@@ -956,8 +956,8 @@ fn test_execute_rjmp_forward_skips_instruction() {
     let mut cpu = Cpu::new();
     // RJMP +1 / LDI R16, 5 (skipped) / LDI R17, 7
     cpu.load_program(&[0xC001, 0xE005, 0xE017]);
-    assert_eq!(cpu.step(), Ok(()));
-    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(2));
+    assert_eq!(cpu.step(), Ok(1));
     assert_eq!(cpu.registers[16], 0);
     assert_eq!(cpu.registers[17], 7);
     assert_eq!(cpu.pc, 3);
@@ -969,7 +969,7 @@ fn test_execute_rjmp_loops_on_itself() {
     // RJMP -1
     cpu.load_program(&[0xCFFF]);
     for _ in 0..3 {
-        assert_eq!(cpu.step(), Ok(()));
+        assert_eq!(cpu.step(), Ok(2));
         assert_eq!(cpu.pc, 0);
     }
 }
@@ -979,8 +979,8 @@ fn test_execute_rjmp_backward() {
     let mut cpu = Cpu::new();
     // LDI R16, 5 / RJMP -2
     cpu.load_program(&[0xE005, 0xCFFE]);
-    assert_eq!(cpu.step(), Ok(()));
-    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(1));
+    assert_eq!(cpu.step(), Ok(2));
     assert_eq!(cpu.registers[16], 5);
     assert_eq!(cpu.pc, 0);
 }
@@ -990,7 +990,7 @@ fn test_execute_rjmp_wraps_below_zero() {
     let mut cpu = Cpu::new();
     // RJMP -2 at address 0
     cpu.load_program(&[0xCFFE]);
-    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(2));
     assert_eq!(cpu.pc as usize, FLASH_SIZE - 1);
 }
 
@@ -1000,7 +1000,7 @@ fn test_execute_rjmp_wraps_past_flash_end() {
     // RJMP +1 at the last address of the flash
     cpu.flash[FLASH_SIZE - 1] = 0xC001;
     cpu.pc = (FLASH_SIZE - 1) as u16;
-    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(2));
     assert_eq!(cpu.pc, 1);
 }
 
@@ -1009,13 +1009,13 @@ fn test_execute_rjmp_does_not_touch_sreg() {
     let mut cpu = Cpu::new();
     cpu.sreg = 0xFF;
     cpu.load_program(&[0xC001]);
-    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(2));
     assert_eq!(cpu.sreg, 0xFF);
 }
 
 fn step_n(cpu: &mut Cpu, steps: usize) {
     for _ in 0..steps {
-        assert_eq!(cpu.step(), Ok(()));
+        assert!(cpu.step().is_ok());
     }
 }
 
@@ -3880,7 +3880,7 @@ fn test_execute_push_with_sp_zero_wraps() {
     cpu.load_program(&[0x930F]);
     cpu.registers[16] = 0x42;
     cpu.sp = 0;
-    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(2));
     assert_eq!(cpu.registers[0], 0x42);
     assert_eq!(cpu.sp, 0xFFFF);
 }
@@ -5110,7 +5110,7 @@ fn test_execute_ld_st_wrap_and_errors() {
     cpu.registers[16] = 0x42;
     cpu.registers[26] = 0xFF;
     cpu.registers[27] = 0x08;
-    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(2));
     assert_eq!(cpu.sram[0x08FF - 0x100], 0x42);
     assert_eq!((cpu.registers[27], cpu.registers[26]), (0x09, 0x00));
 
@@ -5120,7 +5120,7 @@ fn test_execute_ld_st_wrap_and_errors() {
     cpu.registers[28] = 0xFF;
     cpu.registers[29] = 0xFF;
     cpu.registers[0] = 0x21;
-    assert_eq!(cpu.step(), Ok(()));
+    assert_eq!(cpu.step(), Ok(2));
     assert_eq!(cpu.registers[16], 0x21);
 }
 

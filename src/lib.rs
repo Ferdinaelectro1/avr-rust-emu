@@ -430,6 +430,7 @@ pub struct Cpu {
     sp: u16,
     sreg: u8,
     io: [u8; IO_SIZE],
+    pub cycles: u64
 }
 
 impl Cpu {
@@ -442,6 +443,7 @@ impl Cpu {
             sp: 0,
             sreg: 0,
             io: [0; IO_SIZE],
+            cycles: 0
         }
     }
 
@@ -472,7 +474,7 @@ impl Cpu {
         Ok(())
     }
 
-    fn read_data(&self, address: u16) -> Result<u8, String> {
+    pub fn read_data(&self, address: u16) -> Result<u8, String> {
         match address {
             REGISTERS_START..=REGISTERS_END => Ok(self.registers[address as usize]),
             SPL_ADDR => Ok((self.sp & 0x00FF) as u8),
@@ -515,9 +517,9 @@ impl Cpu {
         Ok(())
     }
 
-    fn execute(&mut self, instruction: Instruction) -> Result<(), String> {
+    fn execute(&mut self, instruction: Instruction) -> Result<u8, String> {
         match instruction {
-            Instruction::Nop => Ok(()),
+            Instruction::Nop => Ok(1),
             Instruction::Unknown(inst) => Err(format!("Error Invalid Instruction [{:#X}]", inst)),
             Instruction::Add { dest, src } => {
                 let op_a = self.registers[dest as usize];
@@ -525,7 +527,7 @@ impl Cpu {
                 let (res, carry) = overflowing_add(op_a, op_b);
                 self.registers[dest as usize] = res;
                 self.update_flags_add(op_a, op_b, res, carry, false);
-                Ok(())
+                Ok(1)
             }
             Instruction::Sub { dest, src } => {
                 let op_a = self.registers[dest as usize];
@@ -533,63 +535,65 @@ impl Cpu {
                 let (res, carry) = overflowing_sub(op_a, op_b);
                 self.registers[dest as usize] = res;
                 self.update_flags_sub(op_a, op_b, res, carry, false);
-                Ok(())
+                Ok(1)
             }
             Instruction::Cp { dest, src } => {
                 let op_a = self.registers[dest as usize];
                 let op_b = self.registers[src as usize];
                 let (res, carry) = overflowing_sub(op_a, op_b);
                 self.update_flags_sub(op_a, op_b, res, carry, false);
-                Ok(())
+                Ok(1)
             }
             Instruction::Ldi { dest, k } => {
                 self.registers[dest as usize] = k;
-                Ok(())
+                Ok(1)
             }
             Instruction::Rjmp { k } => {
                 self.pc = (self.pc as i32 + k as i32).rem_euclid(FLASH_SIZE as i32) as u16;
-                Ok(())
+                Ok(2)
             }
             Instruction::BRBS { s, k } => {
                 if (1 << s) & self.sreg != 0 {
                     self.pc = (self.pc as i16 + k as i16).rem_euclid(FLASH_SIZE as i16) as u16;
+                    return Ok(2);
                 }
-                Ok(())
+                Ok(1)
             }
             Instruction::BRBC { s, k } => {
                 if (1 << s) & self.sreg == 0 {
                     self.pc = (self.pc as i16 + k as i16).rem_euclid(FLASH_SIZE as i16) as u16;
+                    return Ok(2);
                 }
-                Ok(())
+                Ok(1)
             }
             Instruction::Inc { rd } => {
                 self.registers[rd as usize] = self.registers[rd as usize].wrapping_add(1);
                 self.update_flags_incdec(self.registers[rd as usize], true);
-                Ok(())
+                Ok(1)
             }
             Instruction::Dec { rd } => {
                 self.registers[rd as usize] = self.registers[rd as usize].wrapping_sub(1);
                 self.update_flags_incdec(self.registers[rd as usize], false);
-                Ok(())
+                Ok(1)
             }
             Instruction::And { rd, rr } => {
                 self.registers[rd as usize] &= self.registers[rr as usize];
                 self.update_flags_logic(self.registers[rd as usize]);
-                Ok(())
+                Ok(1)
             }
             Instruction::Or { rd, rr } => {
                 self.registers[rd as usize] |= self.registers[rr as usize];
                 self.update_flags_logic(self.registers[rd as usize]);
-                Ok(())
+                Ok(1)
             }
             Instruction::Eor { rd, rr } => {
                 self.registers[rd as usize] ^= self.registers[rr as usize];
                 self.update_flags_logic(self.registers[rd as usize]);
-                Ok(())
+                Ok(1)
             }
             Instruction::Mov { rd, rr } => {
                 self.registers[rd as usize] = self.registers[rr as usize];
-                Ok(())
+                Ok(1)
             }
             Instruction::Adc { rd, rr } => {
                 let op_a = self.registers[rd as usize];
@@ -599,7 +603,7 @@ impl Cpu {
                 let (res, c2) = overflowing_add(res, if last_carry_on { 1 } else { 0 });
                 self.registers[rd as usize] = res;
                 self.update_flags_add(op_a, op_b, res, c1 | c2, last_carry_on);
-                Ok(())
+                Ok(1)
             }
             Instruction::Sbc { rd, rr } => {
                 let op_a = self.registers[rd as usize];
@@ -613,7 +617,7 @@ impl Cpu {
                 if last_zero_off {
                     self.sreg &= !(FLAG_ZERO);
                 }
-                Ok(())
+                Ok(1)
             }
             Instruction::Subi { rd, k } => {
                 let op_a = self.registers[rd as usize];
@@ -621,24 +625,24 @@ impl Cpu {
                 let (res, carry) = overflowing_sub(op_a, op_b);
                 self.registers[rd as usize] = res;
                 self.update_flags_sub(op_a, op_b, res, carry, false);
-                Ok(())
+                Ok(1)
             }
             Instruction::Cpi { rd, k } => {
                 let op_a = self.registers[rd as usize];
                 let op_b = k;
                 let (res, carry) = overflowing_sub(op_a, op_b);
                 self.update_flags_sub(op_a, op_b, res, carry, false);
-                Ok(())
+                Ok(1)
             }
             Instruction::Andi { rd, k } => {
                 self.registers[rd as usize] &= k;
                 self.update_flags_logic(self.registers[rd as usize]);
-                Ok(())
+                Ok(1)
             }
             Instruction::Ori { rd, k } => {
                 self.registers[rd as usize] |= k;
                 self.update_flags_logic(self.registers[rd as usize]);
-                Ok(())
+                Ok(1)
             }
             Instruction::Sbci { rd, k } => {
                 let op_a = self.registers[rd as usize];
@@ -652,7 +656,7 @@ impl Cpu {
                 if last_zero_off {
                     self.sreg &= !(FLAG_ZERO);
                 }
-                Ok(())
+                Ok(1)
             }
             Instruction::Cpc { rd, rr } => {
                 let op_a = self.registers[rd as usize];
@@ -665,13 +669,13 @@ impl Cpu {
                 if last_zero_off {
                     self.sreg &= !(FLAG_ZERO);
                 }
-                Ok(())
+                Ok(1)
             }
             Instruction::Com { rd } => {
                 self.registers[rd as usize] = !self.registers[rd as usize];
                 self.update_flags_logic(self.registers[rd as usize]);
                 self.sreg |= FLAG_CARRY;
-                Ok(())
+                Ok(1)
             }
             Instruction::Neg { rd } => {
                 let op_a = 0;
@@ -679,7 +683,7 @@ impl Cpu {
                 let (res, carry) = overflowing_sub(op_a, op_b);
                 self.registers[rd as usize] = res;
                 self.update_flags_sub(op_a, op_b, res, carry, false);
-                Ok(())
+                Ok(1)
             }
             Instruction::Asr { rd } => {
                 let carry = self.registers[rd as usize] & 0x01 != 0;
@@ -687,13 +691,13 @@ impl Cpu {
                 self.registers[rd as usize] = self.registers[rd as usize] >> 1;
                 self.registers[rd as usize] |= old_seven_bit;
                 self.update_flags_shift(self.registers[rd as usize], carry);
-                Ok(())
+                Ok(1)
             }
             Instruction::Lsr { rd } => {
                 let carry = self.registers[rd as usize] & 0x01 != 0;
                 self.registers[rd as usize] = self.registers[rd as usize] >> 1;
                 self.update_flags_shift(self.registers[rd as usize], carry);
-                Ok(())
+                Ok(1)
             }
             Instruction::Ror { rd } => {
                 let old_carry_on = self.sreg & FLAG_CARRY != 0;
@@ -703,12 +707,12 @@ impl Cpu {
                     self.registers[rd as usize] |= 0x80; //turn on 7 bit
                 }
                 self.update_flags_shift(self.registers[rd as usize], carry);
-                Ok(())
+                Ok(1)
             }
             Instruction::Swap { rd } => {
                 self.registers[rd as usize] = ((self.registers[rd as usize] >> 4) & 0x0F)
                     | ((self.registers[rd as usize] << 4) & 0xF0);
-                Ok(())
+                Ok(1)
             }
             Instruction::Adiw { rd, k } => {
                 let rdh = self.registers[(rd + 1) as usize] as u16;
@@ -718,7 +722,7 @@ impl Cpu {
                 self.registers[(rd + 1) as usize] = ((res >> 8) & 0x00FF) as u8;
                 self.registers[rd as usize] = (res & 0x00FF) as u8;
                 self.update_flags_word(rdw, res, true);
-                Ok(())
+                Ok(2)
             }
             Instruction::Sbiw { rd, k } => {
                 let rdh = self.registers[(rd + 1) as usize] as u16;
@@ -728,19 +732,19 @@ impl Cpu {
                 self.registers[(rd + 1) as usize] = ((res >> 8) & 0x00FF) as u8;
                 self.registers[rd as usize] = (res & 0x00FF) as u8;
                 self.update_flags_word(rdw, res, false);
-                Ok(())
+                Ok(2)
             }
             Instruction::Movw { rd, rr } => {
                 self.registers[rd as usize] = self.registers[rr as usize];
                 self.registers[(rd + 1) as usize] = self.registers[(rr + 1) as usize];
-                Ok(())
+                Ok(1)
             }
             Instruction::Mul { rd, rr } => {
                 let res = self.registers[rd as usize] as u16 * self.registers[rr as usize] as u16;
                 self.registers[0] = (res & 0x00FF) as u8;
                 self.registers[1] = ((res >> 8) & 0x00FF) as u8;
                 self.update_flags_mul(res);
-                Ok(())
+                Ok(2)
             }
             Instruction::Muls { rd, rr } => {
                 let res = (self.registers[rd as usize] as i8) as i16
@@ -748,7 +752,7 @@ impl Cpu {
                 self.registers[0] = (res & 0x00FF) as u8;
                 self.registers[1] = ((res >> 8) & 0x00FF) as u8;
                 self.update_flags_mul(res as u16);
-                Ok(())
+                Ok(2)
             }
             Instruction::Mulsu { rd, rr } => {
                 let signed_res =
@@ -756,15 +760,15 @@ impl Cpu {
                 self.registers[0] = (signed_res & 0x00FF) as u8;
                 self.registers[1] = ((signed_res >> 8) & 0x00FF) as u8;
                 self.update_flags_mul(signed_res as u16);
-                Ok(())
+                Ok(2)
             }
             Instruction::Bset { s } => {
                 self.sreg |= 1u8 << s;
-                Ok(())
+                Ok(1)
             }
             Instruction::Bclr { s } => {
                 self.sreg &= !(1u8 << s);
-                Ok(())
+                Ok(1)
             }
             Instruction::Bld { rd, b } => {
                 if self.sreg & FLAG_BIT_COPY != 0 {
@@ -772,7 +776,7 @@ impl Cpu {
                 } else {
                     self.registers[rd as usize] &= !(1 << b);
                 }
-                Ok(())
+                Ok(1)
             }
             Instruction::Bst { rd, b } => {
                 if self.registers[rd as usize] & (1 << b) != 0 {
@@ -780,7 +784,7 @@ impl Cpu {
                 } else {
                     self.sreg &= !FLAG_BIT_COPY;
                 }
-                Ok(())
+                Ok(1)
             }
             Instruction::Fmul { rd, rr } => {
                 let a = self.registers[rd as usize] as u16;
@@ -790,7 +794,7 @@ impl Cpu {
                 self.registers[0] = res as u8;
                 self.registers[1] = (res >> 8) as u8;
                 self.update_flags_fmul(product, res);
-                Ok(())
+                Ok(2)
             }
             Instruction::Fmuls { rd, rr } => {
                 let a = self.registers[rd as usize] as i8 as i16;
@@ -800,7 +804,7 @@ impl Cpu {
                 self.registers[0] = res as u8;
                 self.registers[1] = (res >> 8) as u8;
                 self.update_flags_fmul(product, res);
-                Ok(())
+                Ok(2)
             }
             Instruction::Fmulsu { rd, rr } => {
                 let a = self.registers[rd as usize] as i8 as i16;
@@ -810,35 +814,35 @@ impl Cpu {
                 self.registers[0] = res as u8;
                 self.registers[1] = (res >> 8) as u8;
                 self.update_flags_fmul(product, res);
-                Ok(())
+                Ok(2)
             }
             Instruction::Out { a, rr } => {
                 self.write_data(a as u16 + IO_START, self.registers[rr as usize])?;
-                Ok(())
+                Ok(1)
             }
             Instruction::In { rd, a } => {
                 self.registers[rd as usize] = self.read_data(a as u16 + IO_START)?;
-                Ok(())
+                Ok(1)
             }
             Instruction::Pop { rd } => {
                 self.sp = self.sp.wrapping_add(1);
                 self.registers[rd as usize] = self.read_data(self.sp)?;
-                Ok(())
+                Ok(2)
             }
             Instruction::Push { rr } => {
                 self.write_data(self.sp, self.registers[rr as usize])?;
                 self.sp = self.sp.wrapping_sub(1);
-                Ok(())
+                Ok(2)
             }
             Instruction::Sts { rr } => {
                 let k = self.fetch()?;
                 self.write_data(k, self.registers[rr as usize])?;
-                Ok(())
+                Ok(2)
             }
             Instruction::Lds { rd } => {
                 let k = self.fetch()?;
                 self.registers[rd as usize] = self.read_data(k)?;
-                Ok(())
+                Ok(2)
             }
             Instruction::Rcall { k } => {
                 let next_instruction = self.pc;
@@ -847,7 +851,7 @@ impl Cpu {
                 self.write_data(self.sp, ((next_instruction >> 8) & 0x00FF) as u8)?;
                 self.sp = self.sp.wrapping_sub(1);
                 self.pc = (self.pc as i32 + k as i32).rem_euclid(FLASH_SIZE as i32) as u16;
-                Ok(())
+                Ok(3)
             }
             Instruction::Ret => {
                 self.sp = self.sp.wrapping_add(1);
@@ -855,18 +859,18 @@ impl Cpu {
                 self.sp = self.sp.wrapping_add(1);
                 let pc_ret_l = self.read_data(self.sp)?;
                 self.pc = ((pc_ret_h as u16) << 8) | (pc_ret_l as u16);
-                Ok(())
+                Ok(4)
             }
             Instruction::Jmp => {
                 let k = self.fetch()?;
                 self.pc = k;
-                Ok(())
+                Ok(3)
             }
             Instruction::Ijmp => {
                 let z_l = self.registers[30];
                 let z_h = self.registers[31];
                 self.pc = ((z_h as u16) << 8) | (z_l as u16);
-                Ok(())
+                Ok(2)
             }
             Instruction::Call => {
                 let dest = self.fetch()?;
@@ -876,7 +880,7 @@ impl Cpu {
                 self.write_data(self.sp, ((ret >> 8) & 0x00FF) as u8)?;
                 self.sp = self.sp.wrapping_sub(1);
                 self.pc = dest;
-                Ok(())
+                Ok(4)
             }
             Instruction::Icall => {
                 let z_l = self.registers[30];
@@ -886,7 +890,7 @@ impl Cpu {
                 self.write_data(self.sp, ((self.pc >> 8) & 0x00FF) as u8)?;
                 self.sp = self.sp.wrapping_sub(1);
                 self.pc = ((z_h as u16) << 8) | (z_l as u16);
-                Ok(())
+                Ok(3)
             }
             Instruction::Reti => {
                 self.sp = self.sp.wrapping_add(1);
@@ -895,47 +899,52 @@ impl Cpu {
                 let pc_l = self.read_data(self.sp)?;
                 self.pc = ((pc_h as u16) << 8) | (pc_l as u16);
                 self.sreg |= FLAG_INTERRUPT_ENABLE;
-                Ok(())
+                Ok(4)
             }
             Instruction::Sbi { a, b } => {
                 let reg_value = self.read_data(a as u16 + IO_START)?;
                 self.write_data(a as u16 + IO_START, reg_value | (1 << b))?;
-                Ok(())
+                Ok(2)
             }
             Instruction::Cbi { a, b } => {
                 let reg_value = self.read_data(a as u16 + IO_START)?;
                 self.write_data(a as u16 + IO_START, reg_value & (!(1 << b)))?;
-                Ok(())
+                Ok(2)
             }
             Instruction::Cpse { rd, rr } => {
                 if self.registers[rd as usize] == self.registers[rr as usize] {
                     self.skip_next()?;
+                    return Ok(2);
                 }
-                Ok(())
+                Ok(1)
             }
             Instruction::Sbic { a, b } => {
                 if self.read_data(a as u16 + IO_START)? & (1 << b) == 0 {
                     self.skip_next()?;
+                    return Ok(2);
                 }
-                Ok(())
+                Ok(1)
             }
             Instruction::Sbis { a, b } => {
                 if self.read_data(a as u16 + IO_START)? & (1 << b) != 0 {
                     self.skip_next()?;
+                    return Ok(2);
                 }
-                Ok(())
+                Ok(1)
             }
             Instruction::Sbrc { rr, b } => {
                 if self.registers[rr as usize] & (1 << b) == 0 {
                     self.skip_next()?;
+                    return Ok(2);
                 }
-                Ok(())
+                Ok(1)
             }
             Instruction::Sbrs { rr, b } => {
                 if self.registers[rr as usize] & (1 << b) != 0 {
                     self.skip_next()?;
+                    return Ok(2);
                 }
-                Ok(())
+                Ok(1)
             }
             Instruction::Ld { rd, pointer, mode } => {
                 let ptr = self.read_ptr(pointer);
@@ -953,7 +962,7 @@ impl Cpu {
                         self.write_ptr(pointer, addr);
                     }
                 }
-                Ok(())
+                Ok(2)
             }
             Instruction::St { rr, pointer, mode } => {
                 let ptr = self.read_ptr(pointer);
@@ -971,53 +980,55 @@ impl Cpu {
                         self.write_ptr(pointer, addr); 
                     }
                 }
-                Ok(())
+                Ok(2)
             }
             Instruction::Ldd { rd, pointer, q } => {
                 let ptr = self.read_ptr(pointer);
                 self.registers[rd as usize] = self.read_data(ptr.wrapping_add(q as u16))?; 
-                Ok(())
+                Ok(2)
             }
             Instruction::Std { rr, pointer, q } => {
                 let ptr = self.read_ptr(pointer);
                 self.write_data(ptr.wrapping_add(q as u16),self.registers[rr as usize])?; 
-                Ok(())
+                Ok(2)
             }
             Instruction::Lpm => {
                 let z = self.read_ptr(Pointer::Z);
                 self.registers[0] = self.read_flash_byte(z)?;
-                Ok(())
+                Ok(3)
             }
             Instruction::Lpmz { rd } => {
                 let z = self.read_ptr(Pointer::Z);
                 self.registers[rd as usize] = self.read_flash_byte(z)?;
-                Ok(())
+                Ok(3)
             }
             Instruction::Lpmzplus { rd } => {
                 let z = self.read_ptr(Pointer::Z);
                 self.registers[rd as usize] = self.read_flash_byte(z)?;
                 self.write_ptr(Pointer::Z, z.wrapping_add(1));
-                Ok(())
+                Ok(3)
             }
             Instruction::Sleep => {
                 //TODO
-                Ok(())
+                Ok(1)
             }
             Instruction::Wdr => {
                 //TODO
-                Ok(())
+                Ok(1)
             }
             Instruction::Break => {
                 //TODO
-                Ok(())
+                Ok(1)
             }
         }
     }
 
-    pub fn step(&mut self) -> Result<(), String> {
+    pub fn step(&mut self) -> Result<u8, String> {
         let instruction_word = self.fetch()?;
         let instruction = decode(instruction_word);
-        self.execute(instruction)
+        let cycles = self.execute(instruction)?;
+        self.cycles += cycles as u64;
+        Ok(cycles)
     }
 
     pub fn load_program(&mut self, words: &[u16]) {
